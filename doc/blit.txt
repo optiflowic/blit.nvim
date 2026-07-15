@@ -1,0 +1,88 @@
+*blit.txt*   Zero-dependency image rendering for Neovim via the kitty graphics protocol
+
+==============================================================================
+CONTENTS                                                       *blit-contents*
+
+    1. Introduction .......................... |blit-introduction|
+    2. Requirements ........................... |blit-requirements|
+    3. Setup ................................... |blit-setup|
+    4. API ...................................... |blit-api|
+    5. Configuration ............................ |blit-config|
+    6. About ..................................... |blit-about|
+
+==============================================================================
+1. Introduction                                            *blit-introduction*
+
+blit.nvim renders images inside Neovim using the kitty graphics protocol.
+No ImageMagick. No luarocks. No external binaries. Pure Lua.
+
+Status: this is an early v0.x release. The protocol plumbing
+(|blit-terminal|-level escape sequence construction and terminal
+detection) is implemented and unit-tested, but the public API below does
+not yet place any image on screen — `show()`, `clear()`, and `clear_all()`
+are reserved no-ops pending the renderer layer.
+
+==============================================================================
+2. Requirements                                            *blit-requirements*
+
+- Neovim >= 0.10
+- One of the following terminals: kitty, WezTerm, Ghostty
+- tmux is explicitly unsupported in v0.x; blit no-ops under tmux
+- GUI frontends and `--embed` (e.g. Neovide) are unsupported; blit no-ops
+
+Run `:checkhealth blit` to see detection results for your environment.
+
+==============================================================================
+3. Setup                                                          *blit-setup*
+>lua
+    require("blit").setup({
+      -- see |blit-config| for available options
+    })
+<
+`setup()` is idempotent and safe to call more than once.
+
+==============================================================================
+4. API                                                               *blit-api*
+
+                                                              *blit.setup()*
+setup({opts})
+    Merge {opts} into blit's configuration. Does no I/O, terminal
+    detection, or autocmd registration.
+
+                                                               *blit.show()*
+show({path}, {opts})
+    Reserved. No-op in this release.
+
+                                                              *blit.clear()*
+clear({handle})
+    Reserved. No-op in this release.
+
+                                                          *blit.clear_all()*
+clear_all()
+    Reserved. No-op in this release.
+
+==============================================================================
+5. Configuration                                                 *blit-config*
+
+Defaults: >lua
+    {
+      max_file_bytes = 5 * 1024 * 1024,
+      debounce_ms = 16,
+    }
+<
+                                                    *blit-config.max_file_bytes*
+max_file_bytes ~
+    Maximum PNG file size blit will read synchronously. Larger files are
+    refused with an error return value.
+
+                                                      *blit-config.debounce_ms*
+debounce_ms ~
+    Debounce interval for scroll-driven redraws, once the renderer layer
+    implements them.
+
+==============================================================================
+6. About                                                            *blit-about*
+
+Repository: blit.nvim
+
+vim:tw=78:ts=8:noet:ft=help:norl:
