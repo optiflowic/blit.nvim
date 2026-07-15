@@ -167,13 +167,19 @@ function M.build_restore_cursor()
   return ESC .. "8"
 end
 
+---@param v any
+---@return boolean
+local function is_positive_integer(v)
+  return type(v) == "number" and v == math.floor(v) and v > 0
+end
+
 ---@param row integer 1-indexed screen row
 ---@param col integer 1-indexed screen column
 ---@return string
 function M.build_move_cursor(row, col)
   vim.validate({
-    row = { row, "number" },
-    col = { col, "number" },
+    row = { row, is_positive_integer, "a positive integer" },
+    col = { col, is_positive_integer, "a positive integer" },
   })
   return ESC .. "[" .. row .. ";" .. col .. "H"
 end

@@ -18,7 +18,9 @@ local NAMESPACE = "blit"
 
 ---@class blit.Geometry
 ---@field lnum integer 1-indexed anchor buffer line
----@field col integer 0-indexed anchor byte column
+---@field col integer 0-indexed anchor byte column; currently unused for
+---placement (virt_lines always render at the window's text-area left edge,
+---independent of the extmark's column) — reserved for future use
 ---@field cols integer target placement width in cell columns
 ---@field rows integer target placement height in cell rows
 
@@ -190,7 +192,13 @@ local function compute_placement(handle)
     return false
   end
 
-  local ok, pos = pcall(vim.fn.screenpos, handle.win, handle.geometry.lnum, handle.geometry.col + 1)
+  -- virt_lines always render starting at the window's text-area left edge
+  -- (the same screen column as byte column 1 of any line), independent of
+  -- the extmark's own column — nvim_buf_set_extmark below anchors it at
+  -- column 0 regardless of handle.geometry.col. Column 1 is queried here
+  -- to match that, not handle.geometry.col (currently unused for
+  -- placement; see the Geometry class doc comment).
+  local ok, pos = pcall(vim.fn.screenpos, handle.win, handle.geometry.lnum, 1)
   if not ok or pos.row == 0 then
     return false
   end
@@ -244,6 +252,8 @@ end
 ---@param handle blit.Handle
 ---@param row integer
 ---@param col integer
+---@return boolean ok
+---@return string? err
 local function place_existing(handle, row, col)
   local sequences = {
     terminal.build_save_cursor(),
@@ -251,8 +261,9 @@ local function place_existing(handle, row, col)
     terminal.build_placement(handle.id, placement_opts(handle)),
     terminal.build_restore_cursor(),
   }
-  local ok = M._write_fn(sequences)
+  local ok, err = M._write_fn(sequences)
   handle.visible = ok and true or false
+  return ok, err
 end
 
 ---@param handle blit.Handle
@@ -439,7 +450,9 @@ end
 ---@field buf? integer defaults to the current buffer of {win}
 ---@field win? integer defaults to the current window
 ---@field lnum? integer 1-indexed anchor line, defaults to {win}'s cursor line
----@field col? integer 0-indexed anchor byte column, defaults to 0
+---@field col? integer 0-indexed anchor byte column, defaults to 0; currently
+---unused for placement (virt_lines always render at the window's text-area
+---left edge) — reserved for future use
 ---@field z_index? integer
 ---@field max_file_bytes? integer defaults to blit.config.defaults.max_file_bytes
 ---@field debounce_ms? integer defaults to the last configured value (initially 16)
@@ -553,7 +566,12 @@ function M.show(path, opts)
     end
     handle.visible = visible
   elseif visible then
-    place_existing(handle, screen_row, screen_col)
+    local ok, err = place_existing(handle, screen_row, screen_col)
+    if not ok then
+      destroy_handle(handle, { free_data = true })
+      maybe_teardown_autocmds()
+      return nil, err
+    end
   end
 
   return handle

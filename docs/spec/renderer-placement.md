@@ -31,9 +31,15 @@ visible }`, matching `AGENTS.md`'s "one image = one handle table" rule.
 `vim.fn.screenpos(win, lnum, col)` maps a buffer position to an absolute
 screen row/col, or `row = 0` if that position is not currently rendered at
 all (scrolled off, inside a closed fold, wrong window). `renderer.lua` calls
-this with the anchor line, then adds 1 to the returned row to get the first
-screen row of the reserved `virt_lines` block (they render immediately below
-the anchor line's own rendered row).
+this with the anchor line and column 1 — always column 1, never
+`geometry.col` — then adds 1 to the returned row to get the first screen row
+of the reserved `virt_lines` block (they render immediately below the
+anchor line's own rendered row). Column 1 is used unconditionally because
+`virt_lines` always render starting at the window's text-area left edge,
+independent of the extmark's own column (the extmark itself is created at a
+hardcoded column 0 below); `geometry.col`/`opts.col` is currently unused for
+placement, reserved for a future version that supports horizontal
+positioning some other way.
 
 **Known limitation**: this assumes the anchor line occupies exactly one
 screen row. With `'wrap'` on and a long anchor line, the true virt_lines
