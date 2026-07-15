@@ -149,6 +149,35 @@ function M.build_delete(id, opts)
   return APC_START .. build_control(parts) .. APC_END
 end
 
+-- Cursor positioning ----------------------------------------------------------
+-- Regular (non-unicode-placeholder) kitty placements render at the
+-- terminal's current cursor position at the moment the placement command is
+-- processed. renderer.lua saves the cursor, moves it to the computed screen
+-- cell, emits the placement, then restores it — see
+-- docs/spec/renderer-placement.md for why this is safe to interleave with
+-- Neovim's own cursor/redraw handling.
+
+---@return string
+function M.build_save_cursor()
+  return ESC .. "7"
+end
+
+---@return string
+function M.build_restore_cursor()
+  return ESC .. "8"
+end
+
+---@param row integer 1-indexed screen row
+---@param col integer 1-indexed screen column
+---@return string
+function M.build_move_cursor(row, col)
+  vim.validate({
+    row = { row, "number" },
+    col = { col, "number" },
+  })
+  return ESC .. "[" .. row .. ";" .. col .. "H"
+end
+
 -- Reserved image ID range ----------------------------------------------------
 -- Range ownership: terminal.lua exposes only these protocol-level facts.
 -- The stateful counter that hands out ids from this range belongs to

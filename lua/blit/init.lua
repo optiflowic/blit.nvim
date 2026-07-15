@@ -1,4 +1,5 @@
 local config = require("blit.config")
+local renderer = require("blit.renderer")
 
 local M = {}
 
@@ -7,13 +8,27 @@ function M.setup(opts)
   M._config = config.merge(opts)
 end
 
----@param _path string
----@param _opts? table
-function M.show(_path, _opts) end
+---@param path string
+---@param opts? blit.ShowOpts
+---@return blit.Handle? handle
+---@return string? err
+function M.show(path, opts)
+  local cfg = M._config or config.merge(nil)
+  local merged = vim.tbl_extend(
+    "force",
+    { max_file_bytes = cfg.max_file_bytes, debounce_ms = cfg.debounce_ms },
+    opts or {}
+  )
+  return renderer.show(path, merged)
+end
 
----@param _handle table
-function M.clear(_handle) end
+---@param handle blit.Handle
+function M.clear(handle)
+  renderer.clear(handle)
+end
 
-function M.clear_all() end
+function M.clear_all()
+  renderer.clear_all()
+end
 
 return M

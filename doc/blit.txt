@@ -16,11 +16,12 @@ CONTENTS                                                       *blit-contents*
 blit.nvim renders images inside Neovim using the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua.
 
-Status: this is an early v0.x release. The protocol plumbing
-(|blit-terminal|-level escape sequence construction and terminal
-detection) is implemented and unit-tested, but the public API below does
-not yet place any image on screen — `show()`, `clear()`, and `clear_all()`
-are reserved no-ops pending the renderer layer.
+Status: early v0.x. `show()` places a PNG at a buffer position using
+reserved `virt_lines` and the kitty graphics protocol; `clear()` and
+`clear_all()` remove placements. An image is only ever shown fully visible
+— if scrolling would cut it off at a window edge, it is hidden until it
+fully fits again (no partial/cropped placements in v0.x). See
+`docs/spec/renderer-placement.md` in the repository for the full design.
 
 ==============================================================================
 2. Requirements                                            *blit-requirements*
@@ -51,15 +52,32 @@ setup({opts})
 
                                                                *blit.show()*
 show({path}, {opts})
-    Reserved. No-op in this release.
+    Show the PNG at {path} anchored under buffer line {opts.lnum}.
+    Returns a handle table on success, or `nil, err_msg` on failure
+    (unsupported environment, missing/oversized file, or bad arguments).
+
+    {opts} is a table:
+      width       (required) target placement width, in cell columns
+      height      (required) target placement height, in cell rows
+      buf         buffer to anchor in (default: current buffer of {win})
+      win         window to anchor in (default: current window)
+      lnum        1-indexed anchor line (default: {win}'s cursor line)
+      col         0-indexed anchor byte column (default: 0)
+      z_index     kitty placement z-index (default: unset)
+
+    blit does not read the PNG's pixel dimensions or auto-size from aspect
+    ratio in v0.x — {opts.width}/{opts.height} are the exact cell counts
+    kitty is asked to fit the image into.
 
                                                               *blit.clear()*
 clear({handle})
-    Reserved. No-op in this release.
+    Remove the placement and extmark for a handle returned by |blit.show()|.
+    The transmitted pixel data is kept (cheap to re-show the same file
+    later); it is only freed when Neovim exits.
 
                                                           *blit.clear_all()*
 clear_all()
-    Reserved. No-op in this release.
+    Calls |blit.clear()| on every currently active handle.
 
 ==============================================================================
 5. Configuration                                                 *blit-config*
@@ -77,8 +95,9 @@ max_file_bytes ~
 
                                                       *blit-config.debounce_ms*
 debounce_ms ~
-    Debounce interval for scroll-driven redraws, once the renderer layer
-    implements them.
+    Debounce interval (milliseconds) for scroll/resize-driven redraws: a
+    single recompute runs this long after the last `WinScrolled`/
+    `WinResized` event in a burst, never one recompute per event.
 
 ==============================================================================
 6. About                                                            *blit-about*

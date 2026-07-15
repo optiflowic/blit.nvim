@@ -5,24 +5,33 @@ geometry, config validation, terminal detection). Actual pixel output is
 terminal-dependent and not testable in CI — run this checklist on kitty and
 WezTerm (and Ghostty when available) before tagging a release.
 
-**Current status: not applicable yet.** This release has no renderer —
-`show()` does not place any image on screen. This checklist is scaffolded
-now so it's ready to fill in once the renderer layer lands.
-
 ## Setup
 
-- [ ] (placeholder — fill in once `show()` renders images)
+- [ ] Have a small PNG file on disk and a scratch buffer open.
+- [ ] `require("blit").show(path, { width = 20, height = 15 })` places the
+      image below the cursor line; the returned handle is a table.
+- [ ] `require("blit").clear(handle)` removes it.
+- [ ] `require("blit").clear_all()` removes every currently shown image.
 
-## kitty
+## Per-terminal checks (repeat for kitty, WezTerm, Ghostty)
 
-- [ ] (placeholder)
-
-## WezTerm
-
-- [ ] (placeholder)
+- [ ] Image appears at the correct buffer line, sized to the requested
+      cell columns/rows.
+- [ ] Scrolling the image fully out of view then back in re-displays it
+      without a visible retransmission delay (cache hit).
+- [ ] Scrolling so the image is cut off at the top or bottom of the window
+      hides it entirely (no partial image bleeding past the window edge) —
+      this is the deliberate v0.x "fully visible or not shown" policy.
+- [ ] Resizing the window (`WinResized`) repositions/hides the image
+      correctly, with a single redraw per resize (not one per intermediate
+      frame).
+- [ ] Closing the window, wiping the buffer, or switching buffers in the
+      anchor window removes the image (no leftover placement).
+- [ ] Quitting Neovim (`:qa`) leaves no stray image on screen after exit.
+- [ ] `:checkhealth blit` reports this terminal as supported.
 
 ## Ghostty
 
-- [ ] (placeholder — weight this terminal's checks heavily; it is the
-      least battle-tested of the three supported terminals, per
-      `docs/spec/kitty-graphics.md`)
+- [ ] Weight the checks above heavily for this terminal; it is the least
+      battle-tested of the three supported terminals, per
+      `docs/spec/kitty-graphics.md`.

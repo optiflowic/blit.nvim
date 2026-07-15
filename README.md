@@ -6,10 +6,11 @@
 Zero-dependency image rendering for Neovim via the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 
-> **Status**: early v0.x. This release ships the protocol plumbing layer
-> (terminal detection + kitty escape-sequence construction, unit-tested)
-> but does not yet render images end-to-end — `show()`/`clear()`/`clear_all()`
-> are reserved no-ops until the renderer layer lands.
+> **Status**: early v0.x. `show()`/`clear()`/`clear_all()` render and remove
+> PNG placements via the kitty graphics protocol. An image is only ever
+> shown fully visible — if scrolling would cut it off at a window edge, it
+> is hidden until it fully fits again (no partial/cropped placements yet).
+> See `docs/spec/renderer-placement.md` for the design.
 
 ## Requirements
 
@@ -57,6 +58,10 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
 
 ### v0.x (unreleased)
 
+- Renderer: `show()`/`clear()`/`clear_all()` place and remove PNG images via
+  extmark-reserved `virt_lines`, with scroll/resize redraw (debounced),
+  transmission caching by `(path, mtime)`, and full lifecycle cleanup
+  (`lua/blit/renderer.lua`). Images are shown only when fully visible; no
+  partial/cropped placement in v0.x.
 - Protocol plumbing: kitty graphics escape-sequence construction, terminal
   capability detection, and tty transport (`lua/blit/terminal.lua`).
-  No user-visible behavior yet — `setup()` only merges config.

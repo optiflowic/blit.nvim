@@ -129,6 +129,28 @@ T["build_delete"]["never emits delete-all"] = function()
   end
 end
 
+T["build_save_cursor"] = MiniTest.new_set()
+
+T["build_save_cursor"]["DECSC"] = function()
+  MiniTest.expect.equality(terminal.build_save_cursor(), ESC .. "7")
+end
+
+T["build_restore_cursor"] = MiniTest.new_set()
+
+T["build_restore_cursor"]["DECRC"] = function()
+  MiniTest.expect.equality(terminal.build_restore_cursor(), ESC .. "8")
+end
+
+T["build_move_cursor"] = MiniTest.new_set()
+
+T["build_move_cursor"]["CUP with row and column"] = function()
+  MiniTest.expect.equality(terminal.build_move_cursor(3, 10), ESC .. "[3;10H")
+end
+
+T["build_move_cursor"]["1,1 origin"] = function()
+  MiniTest.expect.equality(terminal.build_move_cursor(1, 1), ESC .. "[1;1H")
+end
+
 T["is_valid_id"] = MiniTest.new_set()
 
 T["is_valid_id"]["range boundaries"] = function()
