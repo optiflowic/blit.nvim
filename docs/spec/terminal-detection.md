@@ -71,6 +71,10 @@ process's lifetime**; `reset_writer()` closes and drops the cached fd
 redraw burst, which matters because the performance rules target
 re-placing a scrolled image within one frame (~16ms) — reopening a fd on
 every scroll-driven redraw would add avoidable latency for no benefit.
+Measured via `vim.uv.hrtime()` (macOS, N=2000 `fs_open`+`fs_write`+`fs_close`
+cycles vs. a cached fd): ~0.032ms/op open-per-call vs. ~0.0015ms/op cached,
+about 21x slower per call — small in absolute terms per call, but avoidable
+overhead on every redraw in a burst.
 Automatic reopen-on-write-failure is deliberately not implemented
 speculatively; if a real failure mode motivates it, that gets added with a
 measurement, per `AGENTS.md`'s performance rules.
