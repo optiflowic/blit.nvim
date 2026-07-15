@@ -13,6 +13,7 @@ M.defaults = {
 ---@param user? table
 ---@return blit.Config
 function M.merge(user)
+  vim.validate({ user = { user, "table", true } })
   return vim.tbl_extend("force", {}, M.defaults, user or {})
 end
 
