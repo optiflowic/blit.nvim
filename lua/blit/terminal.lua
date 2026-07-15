@@ -80,7 +80,7 @@ function M.build_transmit(png_bytes, opts)
   vim.validate({
     png_bytes = { png_bytes, "string" },
     opts = { opts, "table" },
-    id = { opts.id, "number" },
+    id = { opts.id, M.is_valid_id, "a valid id in blit's reserved range" },
     action = {
       opts.action,
       function(v)
@@ -133,7 +133,7 @@ end
 ---@param opts? blit.terminal.PlacementOpts
 ---@return string sequence
 function M.build_placement(id, opts)
-  vim.validate({ id = { id, "number" } })
+  vim.validate({ id = { id, M.is_valid_id, "a valid id in blit's reserved range" } })
   local parts = { { "a", "p" }, { "i", id } }
   append_placement_parts(parts, opts)
   return APC_START .. build_control(parts) .. APC_END
@@ -143,7 +143,7 @@ end
 ---@param opts? { free_data?: boolean }
 ---@return string sequence
 function M.build_delete(id, opts)
-  vim.validate({ id = { id, "number" } })
+  vim.validate({ id = { id, M.is_valid_id, "a valid id in blit's reserved range" } })
   local d = (opts and opts.free_data) and "I" or "i"
   local parts = { { "a", "d" }, { "d", d }, { "i", id } }
   return APC_START .. build_control(parts) .. APC_END
