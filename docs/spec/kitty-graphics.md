@@ -29,6 +29,7 @@ Every command is an APC (Application Program Command) escape sequence:
 | `i` | image id | one of blit's reserved range, see below |
 | `q` | quiet | `2` (suppress all responses) always, see "Response handling" below |
 | `m` | more chunks | `1` (more chunks follow) / `0` (last chunk) |
+| `p` | placement id | always `1` (blit's single fixed placement id — see "Placement" below) |
 | `c`, `r` | placement columns/rows | caller-supplied, cell-fit dimensions |
 | `z` | z-index | caller-supplied |
 | `C` | cursor movement | `1` (don't move cursor) when requested |
@@ -50,12 +51,25 @@ Every command is an APC (Application Program Command) escape sequence:
 
 ## Placement
 
-- `a=p,i=<id>` redisplays an already-transmitted image without resending
+- `a=p,i=<id>,p=1` redisplays an already-transmitted image without resending
   pixel data. This is how blit satisfies the performance rule that
   scroll/resize redraws must reuse the existing id rather than
   re-transmitting.
-- Optional placement keys, in the fixed order blit emits them: `c=`, `r=`,
-  `z=`, `C=1` (only present if requested).
+- `p=1` (blit's fixed placement id, `terminal.PLACEMENT_ID`) is **always**
+  sent, on every placement command — both the initial `a=T` transmit+display
+  and every later `a=p` reposition. If `p=` is omitted, the terminal creates
+  a brand-new placement on every call instead of moving the existing one;
+  since blit repositions on every debounced `WinScrolled`/`WinResized`
+  redraw, this silently accumulates stacked "ghost" placements at each prior
+  screen position — visible as partial/duplicated image fragments while
+  scrolling, until a `a=d,d=i` delete (see below) clears all of them at
+  once. Reusing the same `i=` **and** `p=` pair on every call makes each
+  `a=p` update that one placement in place instead. blit never needs more
+  than one placement id per image id: `renderer.lua`'s cache only ever marks
+  a given image id "active" for a single handle at a time, so a constant
+  `p=1` can never collide with a second live placement of the same id.
+- Optional placement keys, in the fixed order blit emits them: `p=` (always
+  present when placing), `c=`, `r=`, `z=`, `C=1` (only present if requested).
 
 ## Deletion
 

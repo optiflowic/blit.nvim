@@ -24,6 +24,15 @@ local APC_END = ESC .. "\\"
 ---@field quiet? 0|1|2                  -- default 2
 ---@field placement? blit.terminal.PlacementOpts
 
+-- Every blit placement uses this single fixed placement id. renderer.lua's
+-- cache never marks the same image id "active" for more than one handle at
+-- once, so a given id has at most one live placement at any time — reusing
+-- a constant placement id means a reposition (`a=p,i=<id>,p=1,...`) UPDATES
+-- that placement in place. Omitting `p=` entirely (or varying it) makes the
+-- terminal create an additional, stacked placement instead of moving the
+-- existing one — see docs/spec/kitty-graphics.md's Placement section.
+M.PLACEMENT_ID = 1
+
 ---@param parts { [1]: string, [2]: string|integer }[]
 ---@return string
 local function build_control(parts)
@@ -118,6 +127,9 @@ function M.build_transmit(png_bytes, opts)
         { "i", opts.id },
         { "q", quiet },
       }
+      if opts.placement then
+        parts[#parts + 1] = { "p", M.PLACEMENT_ID }
+      end
       append_placement_parts(parts, opts.placement)
       parts[#parts + 1] = { "m", more }
       control = build_control(parts)
@@ -134,7 +146,7 @@ end
 ---@return string sequence
 function M.build_placement(id, opts)
   vim.validate({ id = { id, M.is_valid_id, "a valid id in blit's reserved range" } })
-  local parts = { { "a", "p" }, { "i", id } }
+  local parts = { { "a", "p" }, { "i", id }, { "p", M.PLACEMENT_ID } }
   append_placement_parts(parts, opts)
   return APC_START .. build_control(parts) .. APC_END
 end

@@ -89,6 +89,23 @@ T["build_transmit"]["action t (transmit-only) differs only in a="] = function()
   MiniTest.expect.equality(display_seq:gsub("a=T", "a=t"), transmit_seq)
 end
 
+T["build_transmit"]["combined transmit+placement carries the fixed placement id"] = function()
+  local png_bytes = "hi"
+  local sequences =
+    terminal.build_transmit(png_bytes, { id = ID, placement = { columns = 10, rows = 5 } })
+  local payload = vim.base64.encode(png_bytes)
+  local expected = ESC
+    .. "_Ga=T,f=100,t=d,i="
+    .. ID
+    .. ",q=2,p="
+    .. terminal.PLACEMENT_ID
+    .. ",c=10,r=5,m=0;"
+    .. payload
+    .. ESC
+    .. "\\"
+  MiniTest.expect.equality(sequences, { expected })
+end
+
 T["build_transmit"]["deterministic across repeated calls"] = function()
   local png_bytes = "some bytes"
   local opts = { id = ID, placement = { columns = 10, rows = 5 } }
@@ -101,13 +118,28 @@ T["build_placement"] = MiniTest.new_set()
 
 T["build_placement"]["minimal"] = function()
   local seq = terminal.build_placement(ID)
-  MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ESC .. "\\")
+  MiniTest.expect.equality(
+    seq,
+    ESC .. "_Ga=p,i=" .. ID .. ",p=" .. terminal.PLACEMENT_ID .. ESC .. "\\"
+  )
 end
 
 T["build_placement"]["with options in canonical order"] = function()
   local seq =
     terminal.build_placement(ID, { columns = 10, rows = 5, z_index = 3, no_move_cursor = true })
-  MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",c=10,r=5,z=3,C=1" .. ESC .. "\\")
+  MiniTest.expect.equality(
+    seq,
+    ESC .. "_Ga=p,i=" .. ID .. ",p=" .. terminal.PLACEMENT_ID .. ",c=10,r=5,z=3,C=1" .. ESC .. "\\"
+  )
+end
+
+T["build_placement"]["always uses the same fixed placement id across calls"] = function()
+  local first = terminal.build_placement(ID, { columns = 10, rows = 5 })
+  local second = terminal.build_placement(ID, { columns = 12, rows = 6 })
+  local function placement_id(sequence)
+    return sequence:match(",p=(%d+),")
+  end
+  MiniTest.expect.equality(placement_id(first), placement_id(second))
 end
 
 T["build_delete"] = MiniTest.new_set()
