@@ -21,7 +21,12 @@ WezTerm (and Ghostty when available) before tagging a release.
       without a visible retransmission delay (cache hit).
 - [ ] Scrolling so the image is cut off at the top or bottom of the window
       hides it entirely (no partial image bleeding past the window edge) —
-      this is the deliberate v0.x "fully visible or not shown" policy.
+      this is the deliberate v0.x "fully visible or not shown" policy. A
+      brief **blank gap** (reserved space, no image and no garbled pixels)
+      during the scroll transition itself is expected — see
+      `docs/spec/renderer-placement.md`'s "Known limitation" note. Fail
+      this check only if the gap persists after scrolling settles, or if
+      any actual image pixels appear outside the fully-visible case.
 - [ ] Resizing the window (`WinResized`) repositions/hides the image
       correctly, with a single redraw per resize (not one per intermediate
       frame).
