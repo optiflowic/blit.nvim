@@ -1,6 +1,8 @@
 local terminal = require("blit.terminal")
 
 local original_writer_factory = terminal._writer_factory
+local original_fs_open = terminal._fs_open
+local original_fs_write = terminal._fs_write
 
 local T = MiniTest.new_set({
   hooks = {
@@ -10,6 +12,8 @@ local T = MiniTest.new_set({
     post_case = function()
       terminal.reset_writer()
       terminal._writer_factory = original_writer_factory
+      terminal._fs_open = original_fs_open
+      terminal._fs_write = original_fs_write
     end,
   },
 })
@@ -74,6 +78,127 @@ T["reset_writer forces the factory to run again"] = function()
   terminal.write({ "b" })
 
   MiniTest.expect.equality(factory_calls, 2)
+end
+
+T["default writer factory tries /dev/tty first and stops there on success"] = function()
+  local opened_paths = {}
+  terminal._fs_open = function(path)
+    table.insert(opened_paths, path)
+    return 7
+  end
+
+  local writer, err, close = terminal._writer_factory()
+
+  MiniTest.expect.equality(opened_paths, { "/dev/tty" })
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(type(writer), "function")
+  MiniTest.expect.equality(type(close), "function")
+end
+
+T["default writer factory falls back to /dev/fd/1 when /dev/tty is unopenable"] = function()
+  local opened_paths = {}
+  terminal._fs_open = function(path)
+    table.insert(opened_paths, path)
+    if path == "/dev/tty" then
+      return nil, "ENXIO: no such device or address: /dev/tty"
+    end
+    return 7
+  end
+
+  local writer, err, close = terminal._writer_factory()
+
+  MiniTest.expect.equality(opened_paths, { "/dev/tty", "/dev/fd/1" })
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(type(writer), "function")
+  MiniTest.expect.equality(type(close), "function")
+end
+
+T["default writer factory propagates the last error when every path fails"] = function()
+  terminal._fs_open = function(path)
+    if path == "/dev/tty" then
+      return nil, "ENXIO: no such device or address: /dev/tty"
+    end
+    return nil, "ENOENT: no such file or directory: /dev/fd/1"
+  end
+
+  local writer, err, close = terminal._writer_factory()
+
+  MiniTest.expect.equality(writer, nil)
+  MiniTest.expect.equality(err, "ENOENT: no such file or directory: /dev/fd/1")
+  MiniTest.expect.equality(close, nil)
+end
+
+T["default writer retries on EAGAIN and eventually succeeds"] = function()
+  terminal._fs_open = function()
+    return 7
+  end
+  local attempts = 0
+  terminal._fs_write = function(_, data)
+    attempts = attempts + 1
+    if attempts < 3 then
+      return nil, "EAGAIN: resource temporarily unavailable, write"
+    end
+    return #data
+  end
+
+  local writer = terminal._writer_factory()
+  local ok, err = writer("hello")
+
+  MiniTest.expect.equality(ok, true)
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(attempts, 3)
+end
+
+T["default writer loops on partial writes until fully flushed"] = function()
+  terminal._fs_open = function()
+    return 7
+  end
+  local seen_chunks = {}
+  terminal._fs_write = function(_, data)
+    table.insert(seen_chunks, data)
+    return 1
+  end
+
+  local writer = terminal._writer_factory()
+  local ok, err = writer("abc")
+
+  MiniTest.expect.equality(ok, true)
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(seen_chunks, { "abc", "bc", "c" })
+end
+
+T["default writer gives up after too many consecutive EAGAINs"] = function()
+  terminal._fs_open = function()
+    return 7
+  end
+  terminal._fs_write = function()
+    return nil, "EAGAIN: resource temporarily unavailable, write"
+  end
+
+  local writer = terminal._writer_factory()
+  local ok, err = writer("x")
+
+  MiniTest.expect.equality(ok, false)
+  MiniTest.expect.equality(type(err), "string")
+  MiniTest.expect.equality(err:find("EAGAIN") ~= nil, true)
+end
+
+T["default writer propagates a non-EAGAIN write error immediately"] = function()
+  terminal._fs_open = function()
+    return 7
+  end
+  local attempts = 0
+  terminal._fs_write = function()
+    attempts = attempts + 1
+    return nil, "EIO: i/o error, write"
+  end
+
+  local writer = terminal._writer_factory()
+  local ok, err = writer("x")
+
+  MiniTest.expect.equality(ok, false)
+  MiniTest.expect.equality(err, "EIO: i/o error, write")
+  MiniTest.expect.equality(attempts, 1)
 end
 
 return T

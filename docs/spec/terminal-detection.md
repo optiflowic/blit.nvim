@@ -81,7 +81,52 @@ measurement, per `AGENTS.md`'s performance rules.
 
 For testability (CI has no real controlling tty), `write(sequences, writer)`
 accepts an injectable `writer` function; production code omits it and gets
-the lazy-cached `/dev/tty` writer described above.
+the lazy-cached tty writer described above.
+
+### /dev/tty fallback: /dev/fd/1
+
+`/dev/tty` resolves the calling process's *controlling terminal* (ctty).
+`detect()`'s `has('ttyout') == 1` check (see above) confirms stdout is a
+real terminal device, but that is not the same guarantee as "this process
+has a ctty" — the two have been observed to disagree in practice:
+
+Neovim's TUI startup reclaims the pty as its own controlling terminal via
+`setsid()` followed by `ioctl(TIOCSCTTY)`, so that job control for
+`:terminal` splits and `SIGWINCH` handling work correctly. `setsid()`
+succeeds unconditionally for a freshly forked, not-yet-group-leader
+process, but the subsequent `TIOCSCTTY` reclaim can be rejected by the
+kernel (`EPERM`) if the pty is still the controlling terminal of another
+live session — e.g. the interactive shell that launched Neovim, when that
+shell's session has not exited. Observed concretely on macOS + WezTerm:
+Neovim ends up as its own session leader (`ps` reports `STAT=Ss`) but with
+no ctty (`TTY=??`), and `/dev/tty` is unopenable (`ENXIO`) for the rest of
+the process's lifetime, even though stdout is genuinely connected to a real
+terminal and `has('ttyout')` correctly reports `1`.
+
+`open_tty_writer()` therefore tries paths in order — `/dev/tty`, then
+`/dev/fd/1` — and uses the first that opens successfully. `/dev/fd/1`
+duplicates the already-open, already-`has('ttyout')`-verified stdout fd by
+descriptor number rather than by ctty lookup, sidestepping the missing-ctty
+problem entirely. This is not "writing to `io.stdout`" in the sense the
+"never write to `io.stdout`" rule above warns against — that rule is about
+routing bytes through Neovim's Lua-level `io.write`/`print`, which may be
+intercepted by Neovim's own UI/message layer; `/dev/fd/1` is a raw OS-level
+duplicate fd, opened and written to via the same direct `vim.uv.fs_open` /
+`vim.uv.fs_write` syscalls used for `/dev/tty`.
+
+### EAGAIN retry and partial writes
+
+`/dev/fd/1` duplicates a file descriptor, and `O_NONBLOCK` is a property of
+the underlying *open file description*, not of any one fd number that
+refers to it — so a fd opened via `/dev/fd/1` can inherit `O_NONBLOCK` from
+Neovim's own event-loop-driven stdout even though the `/dev/tty` path (a
+fresh, unrelated open) never would. A `write()` on a non-blocking fd
+returns `EAGAIN` if the terminal's input buffer is temporarily full, which
+a multi-KB base64 image transmission can trigger even on a healthy fd.
+`write_all()` retries on `EAGAIN` after a short (1ms) sleep, up to 50
+attempts, before giving up. Writes to a tty/pipe fd are also not guaranteed
+to consume the whole buffer in one call regardless of blocking mode, so
+`write_all()` loops on partial writes (`n < #data`) until fully flushed.
 
 ## Known false-negative / false-positive risks (accepted for v0.x)
 
