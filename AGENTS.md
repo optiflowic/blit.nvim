@@ -140,6 +140,13 @@ the memo, fix the memo in the same PR.
   and README changelog section.
 - When a spec is ambiguous or two valid designs conflict with these rules:
   STOP and ask. Do not pick silently. Present options with trade-offs.
+- Releases: [release-please](https://github.com/googleapis/release-please)
+  (`.github/workflows/release-please.yaml`) tracks Conventional Commits on `main`
+  and keeps an up-to-date release PR open, bumping `.release-please-manifest.json`
+  and `CHANGELOG.md`. `bump-minor-pre-major` is enabled, so `feat:`/breaking
+  changes bump MINOR (not MAJOR) while the manifest major version stays `0`,
+  matching the `0.MINOR.PATCH` policy above. Merging the release PR tags the
+  release — run `docs/manual-testing.md`'s checklist first.
 
 ## Out of Scope (do not implement without explicit approval)
 
