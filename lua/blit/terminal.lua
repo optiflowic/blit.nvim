@@ -24,6 +24,15 @@ local APC_END = ESC .. "\\"
 ---@field quiet? 0|1|2                  -- default 2
 ---@field placement? blit.terminal.PlacementOpts
 
+-- Every blit placement uses this single fixed placement id. renderer.lua's
+-- cache never marks the same image id "active" for more than one handle at
+-- once, so a given id has at most one live placement at any time — reusing
+-- a constant placement id means a reposition (`a=p,i=<id>,p=1,...`) UPDATES
+-- that placement in place. Omitting `p=` entirely (or varying it) makes the
+-- terminal create an additional, stacked placement instead of moving the
+-- existing one — see docs/spec/kitty-graphics.md's Placement section.
+M.PLACEMENT_ID = 1
+
 ---@param parts { [1]: string, [2]: string|integer }[]
 ---@return string
 local function build_control(parts)
@@ -118,6 +127,9 @@ function M.build_transmit(png_bytes, opts)
         { "i", opts.id },
         { "q", quiet },
       }
+      if opts.placement then
+        parts[#parts + 1] = { "p", M.PLACEMENT_ID }
+      end
       append_placement_parts(parts, opts.placement)
       parts[#parts + 1] = { "m", more }
       control = build_control(parts)
@@ -134,7 +146,7 @@ end
 ---@return string sequence
 function M.build_placement(id, opts)
   vim.validate({ id = { id, M.is_valid_id, "a valid id in blit's reserved range" } })
-  local parts = { { "a", "p" }, { "i", id } }
+  local parts = { { "a", "p" }, { "i", id }, { "p", M.PLACEMENT_ID } }
   append_placement_parts(parts, opts)
   return APC_START .. build_control(parts) .. APC_END
 end
@@ -279,28 +291,91 @@ end
 -- tty transport ---------------------------------------------------------------
 -- Never write to io.stdout: Neovim's UI protocol may be multiplexing that
 -- stream, and it may be redirected. /dev/tty is the controlling terminal
--- device, independent of stdout. See docs/spec/terminal-detection.md.
+-- device, independent of stdout, so it's tried first.
+--
+-- Fallback to /dev/fd/1: some Neovim + terminal combinations leave the
+-- Neovim process without a controlling terminal even though detect()'s
+-- has('ttyout') check confirms stdout is a real terminal (Neovim's startup
+-- reclaims the pty via setsid()+TIOCSCTTY, and that reclaim can be rejected
+-- by the kernel if the launching shell's session still holds the pty as its
+-- own controlling terminal). /dev/tty is then unopenable (ENXIO) for the
+-- rest of the process's life. /dev/fd/1 opens a duplicate of the
+-- already-open, already-verified-real stdout fd by descriptor rather than
+-- by controlling-terminal lookup, sidestepping the missing-ctty problem.
+-- See docs/spec/terminal-detection.md.
 
 ---@alias blit.terminal.Writer fun(data: string): boolean, string?
 ---@alias blit.terminal.WriterFactory fun(): blit.terminal.Writer?, string?, (fun())?
 
----@return blit.terminal.Writer?, string?, (fun())?
-local function open_tty_writer()
-  local fd, open_err = vim.uv.fs_open("/dev/tty", "w", 438)
-  if not fd then
-    return nil, open_err or "blit.terminal: unable to open /dev/tty"
-  end
-  local function writer(data)
-    local n, write_err = vim.uv.fs_write(fd, data)
-    if not n then
+local TTY_PATHS = { "/dev/tty", "/dev/fd/1" }
+
+-- Overridable seam for tests: production code always goes through
+-- vim.uv.fs_open; tests inject a stub so the /dev/tty -> /dev/fd/1 fallback
+-- is exercisable without a real tty.
+M._fs_open = function(path)
+  return vim.uv.fs_open(path, "w", 438)
+end
+
+-- Overridable seam for tests: production code always goes through
+-- vim.uv.fs_write; tests inject a stub to exercise EAGAIN retry and partial
+-- write handling without a real fd.
+M._fs_write = function(fd, data)
+  return vim.uv.fs_write(fd, data)
+end
+
+local WRITE_MAX_EAGAIN_RETRIES = 50
+local WRITE_EAGAIN_RETRY_SLEEP_MS = 1
+
+-- /dev/fd/1 (see the fallback note above) can share its underlying open
+-- file description's O_NONBLOCK flag with Neovim's own event-loop-driven
+-- stdout, so a write can return EAGAIN under a large/bursty payload (e.g. a
+-- multi-KB base64 image transmission) even though the fd is otherwise
+-- healthy — retrying after a short sleep is the standard remedy. A single
+-- fs_write is also not guaranteed to consume the whole buffer for a
+-- tty/pipe fd, so partial writes are looped until fully flushed.
+---@param fd integer
+---@param data string
+---@return boolean ok
+---@return string? err
+local function write_all(fd, data)
+  local offset = 0
+  local retries = 0
+  while offset < #data do
+    local n, write_err = M._fs_write(fd, offset == 0 and data or data:sub(offset + 1))
+    if n then
+      offset = offset + n
+      retries = 0
+    elseif write_err and vim.startswith(write_err, "EAGAIN") then
+      retries = retries + 1
+      if retries > WRITE_MAX_EAGAIN_RETRIES then
+        return false,
+          "blit.terminal: write still EAGAIN after " .. WRITE_MAX_EAGAIN_RETRIES .. " retries"
+      end
+      vim.uv.sleep(WRITE_EAGAIN_RETRY_SLEEP_MS)
+    else
       return false, write_err
     end
-    return true
   end
-  local function close()
-    vim.uv.fs_close(fd)
+  return true
+end
+
+---@return blit.terminal.Writer?, string?, (fun())?
+local function open_tty_writer()
+  local last_err
+  for _, path in ipairs(TTY_PATHS) do
+    local fd, open_err = M._fs_open(path)
+    if fd then
+      local function writer(data)
+        return write_all(fd, data)
+      end
+      local function close()
+        vim.uv.fs_close(fd)
+      end
+      return writer, nil, close
+    end
+    last_err = open_err
   end
-  return writer, nil, close
+  return nil, last_err or "blit.terminal: unable to open a tty device"
 end
 
 -- Overridable seam: tests replace this to observe/control writer creation

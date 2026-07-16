@@ -71,6 +71,32 @@ The pure check (`fully_within(anchor, span, bound_start, bound_end)` in
 span - 1 <= bound_end`, applied independently to rows and columns; both must
 hold.
 
+**Known limitation: a blank gap can flash during the scroll transition.**
+`compute_placement` treats the anchor line as invisible once
+`vim.fn.screenpos(win, lnum, 1)` returns `row = 0` (scrolled off), and
+correctly stops placing/hides the image at that point (verified: the
+`a=d`/`a=p` sequences blit sends are always correct — this is not a
+protocol-layer bug). But Neovim's own `virt_lines` rendering does not
+follow the same all-or-nothing rule: it treats a buffer line plus its
+attached `virt_lines` as one scrollable block, so the window's topline can
+land *inside* that block — showing the tail of the reserved blank rows on
+screen even though the owning line's own `screenpos` already reports
+fully off-screen. Since blit has (correctly, per the policy above) not
+placed an image there, this reads as an empty gap at the top of the
+window during the scroll transition, not a garbled/partial image. This is
+the same root cause reported against `3rd/image.nvim` (see their issue
+#213): there is no viewport API to ask "how many virtual rows above
+topline are currently showing" without tracking scroll events yourself,
+and even with that number in hand, closing the gap correctly requires
+showing a genuinely cropped slice of the image (kitty's placement source
+rectangle, `x`,`y`,`w`,`h` in pixels) — not just hiding or resizing
+`virt_lines`, which does not make the missing pixels reappear and risks
+its own topline/scroll feedback instability from resizing a line's height
+while it's mid-scroll. Source-rectangle cropping is a real feature (PNG
+pixel-dimension reading, new protocol keys, replacing the boolean
+`fully_within` check with crop-amount math) and is intentionally deferred,
+not implemented as part of the visibility policy above.
+
 ## Positioning a placement: cursor save/move/restore
 
 Non-unicode-placeholder kitty placements render at the terminal's current
@@ -106,14 +132,17 @@ for that exact file content — a list, not a single entry, because:
   ("re-placement... must reuse its ID — never re-transmit").
 - `show()` on a cache hit where every existing entry is **active** (already
   placed live somewhere else) transmits a fresh copy under a new id instead
-  of reusing/relocating the active one. **v0.x does not implement kitty's
-  placement-id (`p=`) key**, so a given image id has only one implicit
-  placement; reusing an active id for a second simultaneous location would
-  silently move the first location's image instead of adding a second one.
-  Supporting true multi-location fan-out for one transmitted image is
-  deferred — it would require extending `docs/spec/kitty-graphics.md` with
-  `p=` on placement/delete and is not needed for the common case (showing
-  one image once, or showing it again after it was cleared).
+  of reusing/relocating the active one. blit does emit kitty's placement-id
+  key (`p=`, always `terminal.PLACEMENT_ID`, a fixed constant — see
+  `docs/spec/kitty-graphics.md`'s Placement section), but that fixed value
+  only prevents ghost placements when *repositioning* an id's one
+  placement; it is not a per-location identity. A given image id therefore
+  still has only one live placement at a time — reusing an active id for a
+  second simultaneous location would silently move the first location's
+  image instead of adding a second one. Supporting true multi-location
+  fan-out for one transmitted image (a distinct, allocated `p=` per
+  location) is deferred and is not needed for the common case (showing one
+  image once, or showing it again after it was cleared).
 
 Cache entries are never evicted except at `VimLeavePre` (or the test-only
 `_reset()`) — an idle entry's id and terminal-side pixel data are kept
