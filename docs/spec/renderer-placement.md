@@ -192,8 +192,9 @@ needed there.
 ## Transmission cache: (path, mtime) keyed, no placement-id fan-out
 
 Cache key: `path .. ":" .. mtime.sec .. "." .. mtime.nsec` (from
-`vim.uv.fs_stat`). Each cache entry is a **list** of `{ id, active }` pairs
-for that exact file content — a list, not a single entry, because:
+`vim.uv.fs_stat`). Each cache entry is a **list** of `{ id, active, lines,
+columns }` entries for that exact file content — a list, not a single
+entry, because:
 
 - `show()` on a cache hit with an **idle** (`active = false`) entry reuses
   that id: no re-transmission, just an `a=p` placement (or nothing yet, if
@@ -213,15 +214,58 @@ for that exact file content — a list, not a single entry, because:
   location) is deferred and is not needed for the common case (showing one
   image once, or showing it again after it was cleared).
 
-Cache entries are never evicted except at `VimLeavePre` (or the test-only
-`_reset()`) — an idle entry's id and terminal-side pixel data are kept
-around so a later `show()` of the same file is cheap. **Known limitation**:
-this means the id pool (65,536 ids, `docs/spec/kitty-graphics.md`'s reserved
-range) is not reclaimed during a long session that `show()`s many distinct
-files; unbounded growth is accepted for v0.x (mirrors that memo's own
-acceptance of the range being merely "negligible collision risk", not
-infinite). `alloc_id()` returns `nil, err` if the range is exhausted;
-`show()` propagates that as a normal `nil, err_msg` failure.
+Cache entries are otherwise never evicted except at `VimLeavePre` (or the
+test-only `_reset()`) — an idle entry's id and terminal-side pixel data are
+kept around so a later `show()` of the same file is cheap. **Known
+limitation**: this means the id pool (65,536 ids,
+`docs/spec/kitty-graphics.md`'s reserved range) is not reclaimed during a
+long session that `show()`s many distinct files; unbounded growth is
+accepted for v0.x (mirrors that memo's own acceptance of the range being
+merely "negligible collision risk", not infinite). `alloc_id()` returns
+`nil, err` if the range is exhausted; `show()` propagates that as a normal
+`nil, err_msg` failure.
+
+**Ghostty exception: idle entries recorded against a stale terminal size
+are evicted eagerly, at reuse time.** Ghostty discards previously-
+transmitted image data behind an id across a real terminal window resize,
+silently — there is no error response to detect it by (`q=2` suppresses
+all responses, `docs/spec/kitty-graphics.md`'s "Response handling"), and
+`:checkhealth blit` still reports the terminal as supported. Reusing such
+an id for a placement-only `a=p` then renders nothing (issue #24). Each
+cache entry therefore also records `vim.o.lines`/`vim.o.columns` (the whole
+Neovim grid size, which tracks the real terminal's size — not a per-window
+size) at the moment of transmission. `acquire_idle_entry` compares an idle
+entry's recorded size against the current size only when `caps.terminal ==
+"ghostty"`; a mismatch means a resize happened at some point since
+transmission, so the entry is treated as dead: its id is freed back to the
+pool, the entry is dropped, and the scan continues to the next idle entry
+(or falls through to a fresh transmit under a new id if none remain) rather
+than handing out a placement-only reuse with nothing behind it.
+
+This is a lazy, reuse-time size comparison rather than a `VimResized`
+autocmd listener. A `VimResized`-based design was considered first but
+rejected: it would need to keep listening even while zero handles exist
+(the bug's own repro is `clear_all()` → resize → `show()` again), which
+means a persistent autocmd outside the handle-gated `augroup` — directly
+conflicting with AGENTS.md's "no timers or autocmds active when zero
+images are displayed" performance rule. The size-comparison approach needs
+no autocmd at all: it only ever runs inside `show()`'s own
+`acquire_idle_entry` call. **Accepted false negative**: if the terminal is
+resized away and back to the *exact* original `lines`/`columns` before the
+next `show()`, the comparison can't tell that a resize happened in
+between, and a dead entry could still be handed out. This is deemed rare
+enough to accept for v0.x; a `VimResized`-driven design would close it at
+the cost of the performance-rule conflict above, and is not pursued here
+without revisiting that rule. Kitty and WezTerm are unaffected either way
+— `terminal_name ~= "ghostty"` short-circuits the check, so their existing
+idle-cache-reuse behavior and cost are unchanged.
+
+Out of scope for this mitigation: a handle that stays visible/active
+across a Ghostty resize (never cleared) is not covered — issue #24's own
+repro clears the handle before resizing, and pre-emptively re-transmitting
+every currently-displayed image on every resize (to also cover that case)
+was judged too costly to take on speculatively without a report confirming
+it actually happens.
 
 ## Lifecycle
 

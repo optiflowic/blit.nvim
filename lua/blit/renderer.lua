@@ -93,7 +93,7 @@ end
 
 -- Transmission cache ----------------------------------------------------------
 
----@type table<string, { id: integer, active: boolean }[]>
+---@type table<string, { id: integer, active: boolean, lines: integer, columns: integer }[]>
 local cache = {}
 
 ---@param path string
@@ -104,15 +104,41 @@ local function cache_key(path, mtime)
 end
 M.cache_key = cache_key
 
+-- Ghostty discards previously-transmitted image data behind an id across a
+-- real terminal window resize, with no error response to detect it by (q=2
+-- suppresses all responses — see docs/spec/kitty-graphics.md's "Response
+-- handling"): reusing such an id for a placement-only reuse (`a=p`) then
+-- silently renders nothing (issue #24). Each cache entry therefore records
+-- the Neovim grid size (`vim.o.lines`/`vim.o.columns`, which tracks the
+-- real terminal's size, not just a per-window size) at transmit time;
+-- acquire_idle_entry rejects (and frees) an idle entry recorded against a
+-- stale size on Ghostty, forcing a fresh transmit instead of trusting dead
+-- data. This is a lazy, reuse-time check rather than a `VimResized`
+-- listener specifically to avoid needing a persistent autocmd outside the
+-- handle-gated augroup — see docs/spec/renderer-placement.md's
+-- Transmission cache section for why and its accepted false-negative case
+-- (a resize that lands back on the exact original size in between is
+-- indistinguishable from no resize at all).
+
 ---@param key string
----@return { id: integer, active: boolean }?
-local function acquire_idle_entry(key)
+---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
+---@return { id: integer, active: boolean, lines: integer, columns: integer }?
+local function acquire_idle_entry(key, terminal_name)
   local entries = cache[key]
   if not entries then
     return nil
   end
-  for _, entry in ipairs(entries) do
-    if not entry.active then
+  local i = 1
+  while i <= #entries do
+    local entry = entries[i]
+    if entry.active then
+      i = i + 1
+    elseif
+      terminal_name == "ghostty" and (entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns)
+    then
+      free_id(entry.id)
+      table.remove(entries, i)
+    else
       entry.active = true
       return entry
     end
@@ -124,7 +150,7 @@ end
 ---@param id integer
 local function register_cache_entry(key, id)
   cache[key] = cache[key] or {}
-  table.insert(cache[key], { id = id, active = true })
+  table.insert(cache[key], { id = id, active = true, lines = vim.o.lines, columns = vim.o.columns })
 end
 
 ---@param key string
@@ -526,7 +552,7 @@ function M.show(path, opts)
   debounce_ms = opts.debounce_ms or debounce_ms
 
   local key = cache_key(path, stat.mtime)
-  local entry = acquire_idle_entry(key)
+  local entry = acquire_idle_entry(key, caps.terminal)
 
   local id, bytes, needs_transmit
   if entry then
