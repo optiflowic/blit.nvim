@@ -33,12 +33,29 @@
 # growing gap between heartbeat timestamps (rather than a steady ~1s cadence)
 # would mirror the reported slow-then-crash pattern.
 #
+# A first version of this script (fixed 2-row toggle, 30Hz, 180s) did NOT
+# reproduce the crash. Follow-up manual testing narrowed the trigger further:
+# anchoring an image near the top of the buffer and scrolling (so its screen
+# row barely changes) never reproduces; anchoring it ~50 lines down and
+# scrolling so it travels from the window's bottom to its top (its screen row
+# sweeping through ~50 distinct values) reproduces within a few seconds. That
+# points at the placement visiting many *distinct* rows, not total request
+# count or elapsed time, as the operative variable -- a fixed 2-row toggle
+# would never exercise that regardless of how long it ran. This version
+# sweeps the row continuously across a configurable range instead of
+# toggling between two fixed rows, to test that theory standalone.
+#
 # Env vars (all optional):
 #   BLIT_REPRO_RATE_HZ       bursts per second (default: 30, matching the
 #                            ~30-40Hz key-repeat rate noted in issue #31)
 #   BLIT_REPRO_DURATION_SEC  total run time in seconds (default: 180 --
-#                            issue #31 only reproduced under a long
-#                            *sustained* stretch, not a handful of taps)
+#                            wraps back to BLIT_REPRO_ROW_START and sweeps
+#                            again if it reaches BLIT_REPRO_ROW_END first)
+#   BLIT_REPRO_ROW_START     first screen row of the sweep (default: 50,
+#                            matching the "anchored ~50 lines down" repro)
+#   BLIT_REPRO_ROW_END       last screen row of the sweep (default: 1,
+#                            matching "travels to the window's top"); the
+#                            row steps by 1 toward this value each burst
 #   BLIT_REPRO_COLS          placement width in cells (default: 20)
 #   BLIT_REPRO_ROWS          placement height in cells (default: 15)
 #   BLIT_REPRO_TTY           tty path to write to (default: auto-probe
@@ -52,8 +69,16 @@ set -u
 
 RATE_HZ="${BLIT_REPRO_RATE_HZ:-30}"
 DURATION_SEC="${BLIT_REPRO_DURATION_SEC:-180}"
+ROW_START="${BLIT_REPRO_ROW_START:-50}"
+ROW_END="${BLIT_REPRO_ROW_END:-1}"
 COLS="${BLIT_REPRO_COLS:-20}"
 ROWS="${BLIT_REPRO_ROWS:-15}"
+
+if [ "$ROW_END" -ge "$ROW_START" ]; then
+  ROW_STEP=1
+else
+  ROW_STEP=-1
+fi
 
 # Same reserved id range blit uses (lua/blit/terminal.lua's ID_RANGE), one
 # fixed id, one fixed placement id -- matches M.PLACEMENT_ID = 1.
@@ -77,7 +102,7 @@ if [ -z "$TTY_PATH" ]; then
   fi
 fi
 
-echo "blit #31 repro: writing to ${TTY_PATH}, ${RATE_HZ}Hz for ${DURATION_SEC}s (image ${COLS}x${ROWS} cells)" >&2
+echo "blit #31 repro: writing to ${TTY_PATH}, ${RATE_HZ}Hz for ${DURATION_SEC}s, row sweep ${ROW_START}->${ROW_END} (image ${COLS}x${ROWS} cells)" >&2
 echo "Ctrl-C to stop early; the image is deleted on a clean exit." >&2
 
 exec 3>"$TTY_PATH" || {
@@ -103,7 +128,7 @@ SLEEP_INTERVAL=$(awk -v hz="$RATE_HZ" 'BEGIN { printf "%.4f", 1 / hz }')
 START_EPOCH=$(date +%s)
 NEXT_HEARTBEAT=$((START_EPOCH + 1))
 ITER=0
-ROW_TOGGLE=0
+ROW=$ROW_START
 
 while :; do
   NOW=$(date +%s)
@@ -112,15 +137,13 @@ while :; do
     break
   fi
 
-  # Alternate the target row each pass so the terminal genuinely has to move
-  # the placement (matching a real scroll changing the anchor's screen row),
-  # rather than repositioning to an unchanged cell every time.
-  if [ "$ROW_TOGGLE" -eq 0 ]; then
-    ROW=2
-    ROW_TOGGLE=1
+  # Sweep the row continuously toward ROW_END, wrapping back to ROW_START
+  # once reached, so the placement visits every distinct row in the range
+  # repeatedly rather than toggling between just two fixed rows.
+  if [ "$ROW" -eq "$ROW_END" ]; then
+    ROW=$ROW_START
   else
-    ROW=3
-    ROW_TOGGLE=0
+    ROW=$((ROW + ROW_STEP))
   fi
 
   # save-cursor, move-cursor, a=p reposition, restore-cursor -- matching
