@@ -380,11 +380,9 @@ T["redraw"] = MiniTest.new_set()
 
 T["redraw"]["hides when the anchor line scrolls past the top edge (issue #28)"] = function()
   -- compute_placement's screenpos() call reports row 0 once the anchor line
-  -- itself scrolls above the window, and fully_within separately rejects an
-  -- anchor before bounds.top for any anchor line still on-screen but whose
-  -- virt_lines span starts above the top edge. Either path must resolve to
-  -- invisible/hidden, mirroring the already-covered bottom-edge case (#23)
-  -- symmetrically for the top edge.
+  -- itself scrolls above the window, resolving to invisible/hidden —
+  -- mirroring the already-covered bottom-edge case (#23) symmetrically for
+  -- the top edge.
   local buf, win = setup_floating(numbered_lines(20), 20, 10)
   local handle = renderer.show(
     tmp_path,
