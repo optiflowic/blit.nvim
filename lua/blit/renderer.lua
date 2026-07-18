@@ -200,6 +200,13 @@ local function compute_placement(handle)
   if vim.api.nvim_win_get_buf(handle.win) ~= handle.buf then
     return false
   end
+  -- screenpos() does not itself account for tab visibility: it keeps
+  -- returning a window's real screen row/col even when that window's tab
+  -- is not the currently active tabpage (verified) — so visibility must be
+  -- checked explicitly here (issue #16).
+  if vim.api.nvim_win_get_tabpage(handle.win) ~= vim.api.nvim_get_current_tabpage() then
+    return false
+  end
 
   -- virt_lines always render starting at the window's text-area left edge
   -- (the same screen column as byte column 1 of any line), independent of
@@ -395,7 +402,7 @@ local function ensure_autocmds()
   autocmds_ready = true
   local group = vim.api.nvim_create_augroup(AUGROUP, { clear = true })
 
-  vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
+  vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized", "TabEnter", "TabLeave" }, {
     group = group,
     callback = schedule_redraw,
   })

@@ -43,6 +43,9 @@ local T = MiniTest.new_set({
         pcall(vim.api.nvim_win_close, win, true)
       end
       opened_wins = {}
+      while vim.fn.tabpagenr("$") > 1 do
+        pcall(vim.cmd, "tabclose")
+      end
     end,
   },
 })
@@ -287,6 +290,36 @@ T["redraw"]["hides once the window shrinks below the reserved rows"] = function(
   MiniTest.expect.equality(handle.visible, false)
   local all = table.concat(captured[1], "")
   MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+end
+
+T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  captured = {}
+  vim.cmd("tabnew")
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(handle.visible, false)
+  local hide_all = table.concat(captured[1], "")
+  MiniTest.expect.equality(hide_all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+
+  captured = {}
+  vim.cmd("tabclose")
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(handle.visible, true)
+  local show_all = table.concat(captured[1], "")
+  MiniTest.expect.equality(show_all:find("a=p", 1, true) ~= nil, true)
+  MiniTest.expect.equality(show_all:find("i=" .. handle.id, 1, true) ~= nil, true)
 end
 
 return T
