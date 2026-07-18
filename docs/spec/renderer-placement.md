@@ -54,6 +54,30 @@ screen coordinates) come from `nvim_win_get_position` + `nvim_win_get_height`
 are not independently accounted for beyond what those two calls already
 report.
 
+## Forcing a redraw before the first placement
+
+`M.show()` calls `M._redraw_fn()` (production: `vim.cmd("redraw")`) right
+after creating the handle's `virt_lines` extmark and before computing its
+placement. This exists because blit writes kitty escape sequences directly
+to the tty (`terminal.write()`), out of band from Neovim's own redraw-to-tty
+output, which is scheduled asynchronously. Without forcing a synchronous
+redraw first, the very first `show()` in a session could race ahead of
+Neovim's own screen paint of the newly-reserved `virt_lines` rows, causing
+the image to be positioned against a row that (from the real terminal's
+point of view) hasn't been reserved yet — confirmed via manual testing
+(issue #19): the image landed one row low, straddling the reserved block
+and the following real buffer line, self-correcting only once some later
+`WinScrolled`/`WinResized` event forced a real redraw anyway.
+
+This is unobservable in headless `make test` runs: `vim.fn.screenpos()` was
+verified (empirically, not assumed) to already return the post-extmark,
+correct row synchronously in headless mode, with or without an interleaved
+`vim.cmd("redraw")` call. The regression test in `tests/test_renderer.lua`
+therefore asserts the pure-logic ordering contract (`_redraw_fn` is called
+before `_write_fn`) rather than a position difference — the actual
+pixel-level fix can only be confirmed on a real terminal, per
+`docs/manual-testing.md`.
+
 ## Visibility policy: fully visible or not shown at all
 
 When an image's reserved row/col span is not **entirely** contained within

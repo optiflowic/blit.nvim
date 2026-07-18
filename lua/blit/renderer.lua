@@ -50,6 +50,15 @@ end
 -- lifecycle logic below is exercisable without a real supported terminal.
 M._detect_fn = terminal.detect
 
+-- Overridable seam for tests: production code always forces a synchronous
+-- screen redraw so a just-added virt_lines reservation has actually been
+-- flushed to the real terminal before positioning a placement against it
+-- (issue #19) — Neovim's own redraw-to-tty output is scheduled
+-- asynchronously and can race blit's direct-tty write otherwise.
+M._redraw_fn = function()
+  vim.cmd("redraw")
+end
+
 -- Image id allocation ---------------------------------------------------------
 -- Pure logic over terminal.lua's reserved range. Ids are handed out
 -- sequentially and only returned to the free pool by destroy_handle's
@@ -539,6 +548,7 @@ function M.show(path, opts)
   }
   table.insert(M._handles, handle)
   ensure_autocmds()
+  M._redraw_fn()
 
   local visible, screen_row, screen_col = compute_placement(handle)
 
@@ -608,6 +618,9 @@ function M._reset()
     return terminal.write(sequences)
   end
   M._detect_fn = terminal.detect
+  M._redraw_fn = function()
+    vim.cmd("redraw")
+  end
 end
 
 return M

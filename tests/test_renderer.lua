@@ -183,6 +183,26 @@ T["show"]["rejects a non-positive width/height"] = function()
   MiniTest.expect.equality(ok, false)
 end
 
+T["show"]["forces a screen redraw before placement (issue #19)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local order = {}
+  renderer._redraw_fn = function()
+    table.insert(order, "redraw")
+  end
+  local original_write_fn = renderer._write_fn
+  renderer._write_fn = function(sequences)
+    table.insert(order, "write")
+    return original_write_fn(sequences)
+  end
+
+  local handle, err =
+    renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(handle.visible, true)
+  MiniTest.expect.equality(order, { "redraw", "write" })
+end
+
 T["clear"] = MiniTest.new_set()
 
 T["clear"]["deletes placement and extmark"] = function()
