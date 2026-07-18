@@ -292,6 +292,41 @@ T["redraw"]["hides once the window shrinks below the reserved rows"] = function(
   MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
 end
 
+T["redraw"]["reissues a=d on every pass while still invisible (issue #23)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 6, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  vim.api.nvim_win_set_config(
+    win,
+    { relative = "editor", row = 0, col = 0, width = 20, height = 5 }
+  )
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(handle.visible, false)
+  MiniTest.expect.equality(#captured, 1)
+
+  -- A second redraw pass with the window still too short must resend the
+  -- delete rather than skip it because handle.visible is already false —
+  -- this is the self-healing retry a terminal that missed/lost the first
+  -- a=d (e.g. WezTerm's scroll-driven rendering lag) depends on.
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(handle.visible, false)
+  MiniTest.expect.equality(#captured, 1)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+end
+
 T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local handle = renderer.show(

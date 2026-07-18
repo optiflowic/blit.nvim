@@ -153,6 +153,19 @@ pixel-dimension reading, new protocol keys, replacing the boolean
 `fully_within` check with crop-amount math) and is intentionally deferred,
 not implemented as part of the visibility policy above.
 
+**Known limitation: a stuck `a=d` can leave clipped pixels on WezTerm past
+the window edge.** Distinct from the blank-gap flash above, this is a
+persistent *bleed* of real image pixels rather than an absent placement —
+observed when the window's bottom edge lands partway through a handle's
+reserved `virt_lines` rows (issue #23). blit's own `a=d`/`a=p` sequences are
+verified correct at the point they're sent; this is WezTerm-side rendering
+lag under scroll (`docs/spec/kitty-graphics.md`'s Per-terminal quirks). See
+"Lifecycle" below for the mitigation (`a=d` reissued every redraw pass a
+handle is invisible, not just on the transition) — this reduces how long
+the stuck state can persist but is not a guaranteed fix, since blit has no
+way to confirm a given `a=d` actually took visible effect (`q=2` suppresses
+terminal responses).
+
 ## Positioning a placement: cursor save/move/restore
 
 Non-unicode-placeholder kitty placements render at the terminal's current
@@ -224,6 +237,25 @@ Two distinct kinds of state transition, kept separate:
   handle exists, since its new `virt_lines` reservation can shift where
   sibling handles now render (issue #18) — see "Forcing a redraw before the
   first placement" above.
+
+  **`a=d` is reissued on every pass a handle is invisible, not just the
+  transition into invisibility.** A successful `M._write_fn()` call for a
+  hide only confirms the delete bytes reached the tty, not that the
+  terminal actually erased the placement on screen — on WezTerm, the
+  documented scroll-driven rendering lag (`docs/spec/kitty-graphics.md`'s
+  Per-terminal quirks) can leave clipped pixels stuck on screen past the
+  window's edge indefinitely, because nothing else ever revisits an
+  already-`handle.visible = false` handle to retry the delete (issue #23).
+  `redraw_all()` therefore reissues `a=d` unconditionally whenever
+  `compute_placement` reports invisible, mirroring how the visible branch
+  already reissues `a=p` every pass regardless of prior state. This is
+  self-healing rather than a root-cause fix for WezTerm's lag — blit cannot
+  detect whether a given `a=d` actually took effect (`q=2` suppresses all
+  terminal responses, see `docs/spec/kitty-graphics.md`'s "Response
+  handling") — but it's cheap (escape-sequence bytes only, no pixel
+  payload) and bounded by the same debounce as everything else in this
+  pass, so a later scroll settling always gets one more chance to clear a
+  stuck placement.
 - **Destroy** (`BufWinLeave` for the specific `(buf, win)` pair,
   `WinClosed` for a closing window, `BufWipeout` for a wiped buffer,
   `M.clear()`/`M.clear_all()`, and `VimLeavePre`): removes the extmark,
