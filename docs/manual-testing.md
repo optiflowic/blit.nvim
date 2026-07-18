@@ -46,6 +46,22 @@ WezTerm (and Ghostty when available) before tagging a release.
 - [ ] Quitting Neovim (`:qa`) leaves no stray image on screen after exit.
 - [ ] `:checkhealth blit` reports this terminal as supported.
 
+## WezTerm
+
+- [ ] Anchor an image whose `virt_lines` block fits entirely within the
+      window, then scroll so the window's *bottom* edge lands partway
+      through the reserved rows (not far enough to scroll the image fully
+      out of view) and let scrolling settle for a few seconds. No clipped
+      image pixels should remain visible past the window's bottom edge —
+      distinct from the expected transient blank-gap flash noted above,
+      this is a persistent bleed of actual pixel data (issue #23). If
+      pixels do stay stuck, scroll by one more line in either direction
+      and confirm they clear within one more debounce interval — blit
+      resends the hide command on every redraw pass a placement is
+      invisible specifically so a later scroll gets another chance to
+      clear a stuck placement (`docs/spec/renderer-placement.md`'s
+      Lifecycle section); pixels stuck past that point are a regression.
+
 ## Ghostty
 
 - [ ] Weight the checks above heavily for this terminal; it is the least

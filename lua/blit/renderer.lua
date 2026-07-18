@@ -298,7 +298,18 @@ local function redraw_all()
     local visible, row, col = compute_placement(handle)
     if visible then
       place_existing(handle, row, col)
-    elseif handle.visible then
+    else
+      -- Resend the hide command unconditionally, even if handle.visible is
+      -- already false from a prior pass — a successful M._write_fn() call
+      -- only means the delete bytes reached the tty, not that the terminal
+      -- actually erased the pixels on screen. WezTerm's known scroll-driven
+      -- rendering lag (docs/spec/kitty-graphics.md's Per-terminal quirks)
+      -- can leave a placement's a=d unprocessed/stuck; without a retry here
+      -- there is no other path back to a correct screen state since redraw
+      -- passes are the only place hide is triggered (issue #23). This is
+      -- the same "reissue every pass regardless of prior state" treatment
+      -- place_existing already gets on the visible branch above, and is
+      -- equally cheap: no pixel payload, escape-sequence bytes only.
       hide_existing(handle)
     end
   end
