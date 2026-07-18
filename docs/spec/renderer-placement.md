@@ -26,6 +26,20 @@ protocol response, out of scope per `docs/spec/kitty-graphics.md`'s
 shaped `{ id, buf, win, extmark_id, path, cache_key, geometry, z_index,
 visible }`, matching `AGENTS.md`'s "one image = one handle table" rule.
 
+**Known limitation**: a handle is bound to exactly one `win` at creation
+time, but the `virt_lines` extmark carrying its reserved blank rows is
+buffer-scoped, not window-scoped — Neovim renders those reserved rows in
+*every* window currently showing that buffer. If the same buffer is split
+into a second window (`:split`/`:vsplit`), the non-anchor window displays
+the reserved blank space with no image in it, for as long as it stays
+open — `compute_placement` only ever computes visibility/position against
+the one `handle.win` it was given. A real fix requires per-window
+placement-id fan-out (a distinct `p=` for each window showing the buffer),
+which conflicts with the one-handle-per-placement data model above and is
+already tracked separately (see "Transmission cache" below and issue #10,
+"Multi-location placement fan-out for a single transmitted image").
+Accepted for v0.x; revisit when #10 ships.
+
 ## Screen coordinate conversion
 
 `vim.fn.screenpos(win, lnum, col)` maps a buffer position to an absolute
