@@ -309,6 +309,61 @@ T["clear"]["deletes placement and extmark"] = function()
   MiniTest.expect.equality(#mark, 0)
 end
 
+T["clear"]["self-retries a=d a bounded number of times with no further events (issue #27)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+
+  captured = {}
+  renderer.clear(handle)
+  MiniTest.expect.equality(#captured, 1)
+
+  -- WezTerm can drop destroy_handle's one-shot a=d with no WinScrolled/
+  -- WinResized event ever following to trigger a resend (unlike the
+  -- still-tracked invisible-handle path, issue #23) — the retry has to be
+  -- self-scheduled to ever fire at all.
+  vim.wait(500, function()
+    return #captured >= 4
+  end)
+  MiniTest.expect.equality(#captured, 4)
+  for _, seq in ipairs(captured) do
+    local all = table.concat(seq, "")
+    MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  end
+
+  -- The retry budget is bounded: nothing further is sent once it's spent.
+  captured = {}
+  vim.wait(100)
+  MiniTest.expect.equality(#captured, 0)
+end
+
+T["clear"]["reusing the id before retries finish cancels the pending retry (issue #27)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local first = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  renderer.clear(first)
+
+  local second = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(second.id, first.id)
+
+  -- Without cancelling `first`'s outstanding retry on reuse, a delayed
+  -- retry would resend a=d for this shared id and delete `second`'s
+  -- freshly re-placed image out from under it.
+  captured = {}
+  vim.wait(200)
+  for _, seq in ipairs(captured) do
+    local all = table.concat(seq, "")
+    MiniTest.expect.equality(all:find("a=d", 1, true), nil)
+  end
+end
+
 T["clear_all"] = MiniTest.new_set()
 
 T["clear_all"]["clears every active handle"] = function()

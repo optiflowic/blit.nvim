@@ -120,6 +120,34 @@ M.cache_key = cache_key
 -- (a resize that lands back on the exact original size in between is
 -- indistinguishable from no resize at all).
 
+-- Destroy-path delete retry queue --------------------------------------------
+-- destroy_handle's a=d is as susceptible to WezTerm's scroll-driven
+-- rendering lag as redraw_all's hide (issue #23), but a destroyed handle
+-- leaves M._handles for good, so there is no later redraw pass left to ever
+-- retry it (issue #27) — unlike a still-tracked invisible handle, which
+-- gets a fresh retry on every subsequent WinScrolled/WinResized pass. Since
+-- destroy can happen with no further such event ever firing (clear_all()
+-- with no follow-up scroll), the retry has to be self-scheduled rather than
+-- riding on redraw_all's normal event-driven cadence. Bounded (not
+-- indefinite like the still-tracked case) so a terminal that never honors
+-- the delete can't keep blit's debounce timer alive forever, violating
+-- AGENTS.md's "fully quiescent idle" rule.
+
+local DESTROY_DELETE_RETRIES = 3
+
+---@type { id: integer, retries: integer }[]
+local pending_deletes = {}
+
+---@param id integer
+local function cancel_pending_delete(id)
+  for i, pending in ipairs(pending_deletes) do
+    if pending.id == id then
+      table.remove(pending_deletes, i)
+      return
+    end
+  end
+end
+
 ---@param key string
 ---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
 ---@return { id: integer, active: boolean, lines: integer, columns: integer }?
@@ -140,6 +168,11 @@ local function acquire_idle_entry(key, terminal_name)
       table.remove(entries, i)
     else
       entry.active = true
+      -- The id may still have a bounded delete retry outstanding from a
+      -- prior destroy (see "Destroy-path delete retry queue" above); this
+      -- reuse legitimately reclaims it, so a late retry must not delete the
+      -- placement being made here.
+      cancel_pending_delete(entry.id)
       return entry
     end
   end
@@ -319,6 +352,12 @@ end
 local debounce_timer = nil
 local debounce_ms = 16
 
+-- Forward-declared: redraw_all's pending-delete retry branch below needs to
+-- self-schedule another pass, but schedule_redraw's own definition (right
+-- after redraw_all) needs redraw_all to already exist as its timer
+-- callback — declaring the local up front breaks that cycle.
+local schedule_redraw
+
 local function redraw_all()
   for _, handle in ipairs(M._handles) do
     local visible, row, col = compute_placement(handle)
@@ -339,9 +378,24 @@ local function redraw_all()
       hide_existing(handle)
     end
   end
+
+  if #pending_deletes > 0 then
+    local still_pending = {}
+    for _, pending in ipairs(pending_deletes) do
+      M._write_fn({ terminal.build_delete(pending.id) })
+      pending.retries = pending.retries - 1
+      if pending.retries > 0 then
+        table.insert(still_pending, pending)
+      end
+    end
+    pending_deletes = still_pending
+    if #pending_deletes > 0 then
+      schedule_redraw()
+    end
+  end
 end
 
-local function schedule_redraw()
+function schedule_redraw()
   if not debounce_timer then
     debounce_timer = vim.uv.new_timer()
   end
@@ -374,13 +428,23 @@ local function destroy_handle(handle, opts)
     drop_cache_entry(handle.cache_key, handle.id)
   else
     mark_cache_entry_idle(handle.cache_key, handle.id)
+    -- Only the free_data=false path (clear()/clear_all(), BufWinLeave,
+    -- WinClosed, BufWipeout) gets a retry: its id stays reserved and its
+    -- cache entry stays around for reuse, so a late retry always still
+    -- refers to either this same dead placement or nothing (cancelled via
+    -- cancel_pending_delete if acquire_idle_entry reclaims the id first).
+    -- VimLeavePre's free_data=true call frees the id immediately, so a
+    -- queued retry there could race a reused id after Neovim exits/the
+    -- process is gone anyway — not worth the risk for a shutdown path.
+    table.insert(pending_deletes, { id = handle.id, retries = DESTROY_DELETE_RETRIES })
+    schedule_redraw()
   end
 end
 
 local autocmds_ready = false
 
 local function maybe_teardown_autocmds()
-  if #M._handles > 0 then
+  if #M._handles > 0 or #pending_deletes > 0 then
     return
   end
   if debounce_timer then
@@ -662,8 +726,13 @@ function M._reset()
   for _, handle in ipairs(handles) do
     destroy_handle(handle, { free_data = true })
   end
-  maybe_teardown_autocmds()
   M._handles = {}
+  -- Discard any still-outstanding destroy-path retries (see "Destroy-path
+  -- delete retry queue") before the teardown check below, so a clear()
+  -- mid-retry in one test case can never leave the debounce timer running
+  -- into the next case.
+  pending_deletes = {}
+  maybe_teardown_autocmds()
   cache = {}
   used_ids = {}
   next_id = terminal.ID_RANGE_START

@@ -309,9 +309,34 @@ Two distinct kinds of state transition, kept separate:
   id back to the pool and the terminal's stored pixel data
   (`d=I`) — everyday `clear()` keeps the cache warm.
 
+  **`a=d` is retried a bounded number of times after destroy too, not just
+  on the redraw path above.** Unlike a still-tracked invisible handle, a
+  destroyed handle leaves `M._handles` for good — so if its `a=d` is the one
+  WezTerm drops, there is no future `redraw_all()` pass left that would ever
+  revisit it, and no guarantee a `WinScrolled`/`WinResized` event even fires
+  again afterward to trigger one (issue #27; the repro is `clear_all()`
+  followed by *no* further input at all). `destroy_handle`'s `free_data =
+  false` path (the everyday teardown reasons above, not `VimLeavePre`)
+  therefore queues its id onto a small self-scheduled retry list
+  (`DESTROY_DELETE_RETRIES`, currently 3 extra attempts) that rides the same
+  debounce timer as `redraw_all`, resending a plain `a=d` each pass until
+  the budget runs out. Bounded, unlike the redraw path's resend-indefinitely
+  behavior, so a terminal that never honors the delete can't keep the
+  debounce timer (and therefore the "fully quiescent idle" guarantee) alive
+  forever. `VimLeavePre`'s `free_data = true` path is excluded: it frees the
+  id immediately, and Neovim is exiting right after, so a queued retry has
+  nothing meaningful left to protect and only risks racing a reused id
+  against a process that's already gone. If `acquire_idle_entry` reclaims a
+  still-queued id for a fresh placement before its retries are spent, the
+  queued entry is cancelled — otherwise a late retry could send `a=d` for an
+  id a brand new placement now legitimately owns.
+
 All autocmds live in one `augroup("blit", { clear = true })`; all extmarks in
 one `nvim_create_namespace("blit")`, both created lazily on first `show()`
-(zero-cost `require`/`setup()`, per AGENTS.md). When the last handle is
-destroyed, the debounce timer is stopped/closed and the augroup is deleted —
-fully quiescent idle, no dangling autocmds or timers, until the next
-`show()` recreates them.
+(zero-cost `require`/`setup()`, per AGENTS.md). Once the last handle is
+destroyed *and* no destroy-path retry is still outstanding (see above), the
+debounce timer is stopped/closed and the augroup is deleted — fully
+quiescent idle, no dangling autocmds or timers, until the next `show()`
+recreates them. A bounded window of up to `DESTROY_DELETE_RETRIES` extra
+passes can elapse between "last handle destroyed" and that quiescent state
+if a retry is in flight.
