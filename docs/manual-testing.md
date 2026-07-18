@@ -67,3 +67,15 @@ WezTerm (and Ghostty when available) before tagging a release.
 - [ ] Weight the checks above heavily for this terminal; it is the least
       battle-tested of the three supported terminals, per
       `docs/spec/kitty-graphics.md`.
+- [ ] `show()` an image, then `clear()` (or `clear_all()`) it, then resize
+      the Ghostty *terminal window itself* by dragging the OS window edge
+      (not `:resize`/`vim.o.lines` from within Neovim), then `show()` the
+      same path again. It must render via a fresh transmission — not
+      silently render nothing (issue #24). If you can watch the escape
+      sequences (or check `:messages`/a wrapper log), confirm the second
+      `show()` after the resize includes a transmit (`a=T`), not just a
+      bare placement (`a=p`) reusing the pre-resize id.
+- [ ] Repeat the same steps *without* resizing in between: the second
+      `show()` should reuse the cached id with a placement-only `a=p`, no
+      retransmission — confirms the resize check isn't discarding the
+      cache unconditionally.

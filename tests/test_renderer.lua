@@ -179,6 +179,61 @@ T["show"]["active cache entry forces a fresh id, never relocates"] = function()
   MiniTest.expect.no_equality(first.id, second.id)
 end
 
+T["show"]["ghostty: reuses idle cache entry when terminal size is unchanged"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local first = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  renderer.clear(first)
+
+  captured = {}
+  local second = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(second.id, first.id)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true), nil)
+  MiniTest.expect.equality(all:find("a=p", 1, true) ~= nil, true)
+end
+
+T["show"]["ghostty: drops idle cache entry and retransmits after a terminal resize (issue #24)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local first = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  renderer.clear(first)
+
+  local original_lines = vim.o.lines
+  vim.o.lines = original_lines + 1
+  captured = {}
+  local second = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  vim.o.lines = original_lines
+
+  MiniTest.expect.no_equality(second.id, first.id)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true) ~= nil, true)
+end
+
+T["show"]["non-ghostty: reuses idle cache entry even after a terminal resize"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local first = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  renderer.clear(first)
+
+  local original_lines = vim.o.lines
+  vim.o.lines = original_lines + 1
+  captured = {}
+  local second = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  vim.o.lines = original_lines
+
+  MiniTest.expect.equality(second.id, first.id)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true), nil)
+end
+
 T["show"]["rejects a non-positive width/height"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local ok =
