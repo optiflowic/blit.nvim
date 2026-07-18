@@ -32,6 +32,9 @@ WezTerm (and Ghostty when available) before tagging a release.
       frame).
 - [ ] Closing the window, wiping the buffer, or switching buffers in the
       anchor window removes the image (no leftover placement).
+- [ ] Opening `:checkhealth` (or any command that opens a new tab) while an
+      image is shown hides it in the new tab, and switching back to the
+      original tab restores it (issue #16).
 - [ ] Quitting Neovim (`:qa`) leaves no stray image on screen after exit.
 - [ ] `:checkhealth blit` reports this terminal as supported.
 

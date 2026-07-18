@@ -48,6 +48,15 @@ takes — not computed here. Accepted for v0.x; revisit if real usage hits it
 (matches the "known false-negative/false-positive risks" pattern used in
 `docs/spec/terminal-detection.md`).
 
+**Verified quirk**: `screenpos()` does not account for tab visibility — it
+keeps returning a window's real screen row/col even when that window
+belongs to a currently *inactive* tabpage, instead of `row = 0`.
+`compute_placement` therefore checks `nvim_win_get_tabpage(handle.win) ==
+nvim_get_current_tabpage()` explicitly before trusting `screenpos()` at all
+(issue #16) — without this, an image would stay frozen on screen after
+switching away from its anchor window's tab (e.g. `:checkhealth`, which
+opens its report in a new tab by default).
+
 Window bounds (`top`, `bottom`, `left`, `right`, all 1-indexed absolute
 screen coordinates) come from `nvim_win_get_position` + `nvim_win_get_height`
 / `nvim_win_get_width`. This is an approximation: winbar/statusline offsets
@@ -158,8 +167,9 @@ infinite). `alloc_id()` returns `nil, err` if the range is exhausted;
 
 Two distinct kinds of state transition, kept separate:
 
-- **Redraw** (`WinScrolled`, `WinResized`, debounced by `config.debounce_ms`
-  — single deferred recompute per burst, per AGENTS.md's performance rule):
+- **Redraw** (`WinScrolled`, `WinResized`, `TabEnter`, `TabLeave`, debounced
+  by `config.debounce_ms` — single deferred recompute per burst, per
+  AGENTS.md's performance rule):
   recomputes visibility/position for every still-anchored handle and
   toggles its placement (`a=p` to show/reposition, `a=d` to hide). Never
   transmits, never destroys a handle.
