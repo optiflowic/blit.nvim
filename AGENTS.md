@@ -87,6 +87,12 @@ Rules:
 - Synchronous file reads are allowed only under a size guard (config `max_file_bytes`,
   default a few MB). Larger files: refuse with `nil, err`.
 - No timers or autocmds active when zero images are displayed (fully quiescent idle).
+  Accepted exception: after the last handle is destroyed, a bounded number of
+  self-scheduled delete retries (`DESTROY_DELETE_RETRIES` in `renderer.lua`) may
+  keep the debounce timer alive for a few extra passes to work around a terminal
+  dropping the delete escape sequence (issue #27) — see
+  `docs/spec/renderer-placement.md`'s Lifecycle section. Bounded and
+  self-terminating, never indefinite.
 - Measure before optimizing: use `vim.uv.hrtime()` around suspected hot paths.
   No speculative optimization; every perf-motivated complexity increase must cite
   a measurement.

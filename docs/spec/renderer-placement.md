@@ -333,7 +333,10 @@ Two distinct kinds of state transition, kept separate:
 
 All autocmds live in one `augroup("blit", { clear = true })`; all extmarks in
 one `nvim_create_namespace("blit")`, both created lazily on first `show()`
-(zero-cost `require`/`setup()`, per AGENTS.md). When the last handle is
-destroyed, the debounce timer is stopped/closed and the augroup is deleted —
-fully quiescent idle, no dangling autocmds or timers, until the next
-`show()` recreates them.
+(zero-cost `require`/`setup()`, per AGENTS.md). Once the last handle is
+destroyed *and* no destroy-path retry is still outstanding (see above), the
+debounce timer is stopped/closed and the augroup is deleted — fully
+quiescent idle, no dangling autocmds or timers, until the next `show()`
+recreates them. A bounded window of up to `DESTROY_DELETE_RETRIES` extra
+passes can elapse between "last handle destroyed" and that quiescent state
+if a retry is in flight.
