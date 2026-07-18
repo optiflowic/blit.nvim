@@ -54,6 +54,39 @@ screen coordinates) come from `nvim_win_get_position` + `nvim_win_get_height`
 are not independently accounted for beyond what those two calls already
 report.
 
+## Forcing a redraw before the first placement
+
+`M.show()` calls `M._redraw_fn()` (production: `vim.cmd("redraw")`) right
+after creating the handle's `virt_lines` extmark and before computing its
+placement. This exists because blit writes kitty escape sequences directly
+to the tty (`terminal.write()`), out of band from Neovim's own redraw-to-tty
+output, which is scheduled asynchronously. Without forcing a synchronous
+redraw first, the very first `show()` in a session could race ahead of
+Neovim's own screen paint of the newly-reserved `virt_lines` rows, causing
+the image to be positioned against a row that (from the real terminal's
+point of view) hasn't been reserved yet — confirmed via manual testing
+(issue #19): the image landed one row low, straddling the reserved block
+and the following real buffer line, self-correcting only once some later
+`WinScrolled`/`WinResized` event forced a real redraw anyway.
+
+This is unobservable in headless `make test` runs: `vim.fn.screenpos()` was
+verified (empirically, not assumed) to already return the post-extmark,
+correct row synchronously in headless mode, with or without an interleaved
+`vim.cmd("redraw")` call. The regression test in `tests/test_renderer.lua`
+therefore asserts the pure-logic ordering contract (`_redraw_fn` is called
+before `_write_fn`) rather than a position difference — the actual
+pixel-level fix can only be confirmed on a real terminal, per
+`docs/manual-testing.md`.
+
+`M.show()` also calls the existing debounced `schedule_redraw()` at the end
+of a successful call whenever more than one handle exists (see "Lifecycle"
+below) — a newly-reserved `virt_lines` block can shift where every
+*other*, already-placed handle in the same window now renders, and this
+catches those up too (issue #18). `redraw_all()` never transmits, only
+repositions/hides via `a=p`/`a=d`, so re-including the handle `show()` just
+created in that same debounced pass is safe — the worst case is one
+redundant, idempotent `a=p` for it.
+
 ## Visibility policy: fully visible or not shown at all
 
 When an image's reserved row/col span is not **entirely** contained within
@@ -162,7 +195,11 @@ Two distinct kinds of state transition, kept separate:
   — single deferred recompute per burst, per AGENTS.md's performance rule):
   recomputes visibility/position for every still-anchored handle and
   toggles its placement (`a=p` to show/reposition, `a=d` to hide). Never
-  transmits, never destroys a handle.
+  transmits, never destroys a handle. `M.show()` also triggers this same
+  debounced pass at the end of a successful call whenever more than one
+  handle exists, since its new `virt_lines` reservation can shift where
+  sibling handles now render (issue #18) — see "Forcing a redraw before the
+  first placement" above.
 - **Destroy** (`BufWinLeave` for the specific `(buf, win)` pair,
   `WinClosed` for a closing window, `BufWipeout` for a wiped buffer,
   `M.clear()`/`M.clear_all()`, and `VimLeavePre`): removes the extmark,

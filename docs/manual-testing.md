@@ -17,6 +17,14 @@ WezTerm (and Ghostty when available) before tagging a release.
 
 - [ ] Image appears at the correct buffer line, sized to the requested
       cell columns/rows.
+- [ ] The very first `show()` call in a fresh session renders fully and
+      correctly positioned immediately — no ghost/duplicate pixels one row
+      below overlapping real buffer text, and no need for a scroll event
+      to "self-correct" the position (issue #19).
+- [ ] Showing a second image on a buffer line *above* an already-shown
+      image repositions the first image to follow its shifted `virt_lines`
+      block within about one debounce interval, instead of leaving it
+      stuck at its old position overlapping buffer text (issue #18).
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
 - [ ] Scrolling so the image is cut off at the top or bottom of the window
