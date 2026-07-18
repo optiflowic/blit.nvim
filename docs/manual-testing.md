@@ -34,7 +34,9 @@ WezTerm (and Ghostty when available) before tagging a release.
       during the scroll transition itself is expected — see
       `docs/spec/renderer-placement.md`'s "Known limitation" note. Fail
       this check only if the gap persists after scrolling settles, or if
-      any actual image pixels appear outside the fully-visible case.
+      any actual image pixels appear outside the fully-visible case — on
+      WezTerm specifically, apply the scroll-once-more recovery pattern
+      from the WezTerm section below before failing this check.
 - [ ] Resizing the window (`WinResized`) repositions/hides the image
       correctly, with a single redraw per resize (not one per intermediate
       frame).
@@ -61,6 +63,15 @@ WezTerm (and Ghostty when available) before tagging a release.
       invisible specifically so a later scroll gets another chance to
       clear a stuck placement (`docs/spec/renderer-placement.md`'s
       Lifecycle section); pixels stuck past that point are a regression.
+- [ ] Repeat the same check at the window's *top* edge: anchor an image
+      near the top of the buffer, scroll down so its `virt_lines` block
+      straddles the window's top edge (not far enough to scroll it fully
+      out of view), and let scrolling settle for a few seconds. This is
+      the same WezTerm scroll-driven repaint lag as the bottom-edge case
+      above, just at the opposite edge (issue #28) — the same recovery
+      pattern applies: if a clipped sliver stays stuck, scroll by one more
+      line in either direction and confirm it clears within one more
+      debounce interval; pixels stuck past that point are a regression.
 - [ ] `show()` an image, then `clear()` (or `clear_all()`) it, *without*
       scrolling or otherwise triggering a redraw afterward. No stuck image
       pixels should remain visible at that location, even immediately after

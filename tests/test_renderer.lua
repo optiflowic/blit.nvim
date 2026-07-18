@@ -378,6 +378,67 @@ end
 
 T["redraw"] = MiniTest.new_set()
 
+T["redraw"]["hides when the anchor line scrolls past the top edge (issue #28)"] = function()
+  -- compute_placement's screenpos() call reports row 0 once the anchor line
+  -- itself scrolls above the window, resolving to invisible/hidden —
+  -- mirroring the already-covered bottom-edge case (#23) symmetrically for
+  -- the top edge.
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = 5 })
+  end)
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+
+  MiniTest.expect.equality(handle.visible, false)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+end
+
+T["redraw"]["reissues a=d on every pass while invisible past the top edge (issue #28)"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = 5 })
+  end)
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(handle.visible, false)
+  MiniTest.expect.equality(#captured, 1)
+
+  -- A second redraw pass with the anchor still scrolled past the top edge
+  -- must resend the delete rather than skip it because handle.visible is
+  -- already false — the same self-healing retry the bottom-edge case
+  -- (#23) already relies on for WezTerm's scroll-driven rendering lag.
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(handle.visible, false)
+  MiniTest.expect.equality(#captured, 1)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+end
+
 T["redraw"]["hides once the window shrinks below the reserved rows"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local handle = renderer.show(
