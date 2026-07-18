@@ -271,16 +271,61 @@ it actually happens.
 
 Two distinct kinds of state transition, kept separate:
 
-- **Redraw** (`WinScrolled`, `WinResized`, `TabEnter`, `TabLeave`, debounced
-  by `config.debounce_ms` — single deferred recompute per burst, per
-  AGENTS.md's performance rule):
+- **Redraw** (`WinScrolled`, `WinResized`, `TabEnter`, `TabLeave`, gated by
+  `config.debounce_ms` and `config.redraw_throttle_ms` together — see
+  "Two-tier redraw cadence" below):
   recomputes visibility/position for every still-anchored handle and
   toggles its placement (`a=p` to show/reposition, `a=d` to hide). Never
   transmits, never destroys a handle. `M.show()` also triggers this same
-  debounced pass at the end of a successful call whenever more than one
+  gated pass at the end of a successful call whenever more than one
   handle exists, since its new `virt_lines` reservation can shift where
   sibling handles now render (issue #18) — see "Forcing a redraw before the
   first placement" above.
+
+  **Two-tier redraw cadence (issue #31).** `schedule_redraw()`'s debounce
+  timer (`debounce_ms`, default 16ms — reset on every event, firing only
+  once no new event arrives for that long) alone is not sufficient to
+  guarantee "single deferred redraw per burst": terminal key-repeat for a
+  held scroll (`<C-e>`/`<C-y>`/`j`/`k`) fires `WinScrolled` roughly every
+  25-33ms (~30-40Hz), a gap *larger* than the 16ms debounce window, so the
+  timer routinely completes its countdown before the next repeat arrives —
+  meaning a sustained hold was triggering a full `redraw_all()` tty-write
+  burst on very close to every single scroll event, not once per burst.
+  Each such pass round-trips through `terminal.lua`'s `write_all()`, which
+  can block synchronously under `EAGAIN` backpressure; this volume was
+  identified as a likely contributor to a WezTerm process crash under
+  sustained fast scrolling (issue #31).
+
+  `renderer.lua` therefore layers a throttle gate (`maybe_redraw()`) between
+  the debounce timer and `redraw_all()`: each debounce firing calls
+  `maybe_redraw()` instead of `redraw_all()` directly. `maybe_redraw()` runs
+  `redraw_all()` immediately if at least `redraw_throttle_ms` (default
+  100ms) has elapsed since the last actual redraw (`last_redraw_at`) — the
+  common single-event case, and a burst's first firing, are unaffected by
+  this at all. Otherwise it arms (at most one) bounded catch-up timer for
+  the remainder of the throttle window, so a suppressed redraw is delayed,
+  never dropped. Net effect: a sustained burst is capped to roughly one
+  actual `redraw_all()` per `redraw_throttle_ms`, regardless of how fast or
+  long the triggering events keep arriving, while a guaranteed trailing
+  redraw still lands after the burst ends — preserving every existing
+  self-heal/correctness guarantee below (#16/#18/#19/#23/#25/#27/#28), all
+  of which only depend on "a redraw pass will eventually run and reissue
+  the current correct state."
+
+  **Accepted trade-off**: worst-case latency from the true last event of a
+  burst to the final correcting redraw is `debounce_ms + redraw_throttle_ms`
+  (~116ms at defaults) while a burst is actively throttling, versus ~16ms
+  for an isolated event — there is no way to know, at the moment a debounce
+  timer fires, whether it's "the real settle" or "mid-burst," so only a
+  bounded fallback resolves that ambiguity in hindsight. A burst that starts
+  more than `redraw_throttle_ms` after the last actual redraw is treated as
+  independent and gets the full prompt (immediate-fire) treatment; one that
+  starts within that window is treated as a continuation of the same
+  throttle window and stays capped — this is intentional, not a special
+  case that needs separate handling. `terminal.lua`'s `write_all()` EAGAIN
+  retry behavior is deliberately untouched by this change — see issue #31
+  for why (pending confirmation from real WezTerm testing on whether the
+  volume reduction alone resolves the crash).
 
   **`a=d` is reissued on every pass a handle is invisible, not just the
   transition into invisibility.** A successful `M._write_fn()` call for a
@@ -297,9 +342,9 @@ Two distinct kinds of state transition, kept separate:
   detect whether a given `a=d` actually took effect (`q=2` suppresses all
   terminal responses, see `docs/spec/kitty-graphics.md`'s "Response
   handling") — but it's cheap (escape-sequence bytes only, no pixel
-  payload) and bounded by the same debounce as everything else in this
-  pass, so a later scroll settling always gets one more chance to clear a
-  stuck placement.
+  payload) and bounded by the same debounce/throttle cadence as everything
+  else in this pass, so a later scroll settling always gets one more chance
+  to clear a stuck placement.
 - **Destroy** (`BufWinLeave` for the specific `(buf, win)` pair,
   `WinClosed` for a closing window, `BufWipeout` for a wiped buffer,
   `M.clear()`/`M.clear_all()`, and `VimLeavePre`): removes the extmark,

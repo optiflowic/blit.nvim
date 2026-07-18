@@ -29,7 +29,9 @@ Severity when reporting findings:
 
 ## Performance (category: perf)
 - [ ] No I/O, detection, or autocmd registration at `require`/`setup` time
-- [ ] Scroll-driven redraws debounced; single redraw per burst
+- [ ] Scroll-driven redraws debounced; single redraw per isolated event, and
+      sustained bursts capped to roughly one redraw per `redraw_throttle_ms`
+      (not one per event) rather than only per-event debounce
 - [ ] Base64 payload dropped after transmission; cache keyed by `(path, mtime)`
 - [ ] Synchronous file reads guarded by `max_file_bytes`
 - [ ] Perf-motivated complexity cites a `vim.uv.hrtime()` measurement

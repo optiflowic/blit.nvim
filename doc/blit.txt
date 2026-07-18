@@ -89,6 +89,7 @@ Defaults: >lua
     {
       max_file_bytes = 5 * 1024 * 1024,
       debounce_ms = 16,
+      redraw_throttle_ms = 100,
     }
 <
                                                     *blit-config.max_file_bytes*
@@ -101,6 +102,14 @@ debounce_ms ~
     Debounce interval (milliseconds) for scroll/resize-driven redraws: a
     single recompute runs this long after the last `WinScrolled`/
     `WinResized` event in a burst, never one recompute per event.
+
+                                              *blit-config.redraw_throttle_ms*
+redraw_throttle_ms ~
+    Throttle window (milliseconds) capping how often a sustained burst of
+    scroll/resize events (e.g. a held-key scroll, faster than
+    `debounce_ms` can coalesce) triggers an actual redraw: at most roughly
+    one per this window, with a guaranteed trailing redraw once the burst
+    settles.
 
 ==============================================================================
 6. About                                                            *blit-about*

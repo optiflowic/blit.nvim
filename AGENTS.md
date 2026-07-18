@@ -77,8 +77,16 @@ Rules:
   detection, no autocmd registration. Everything is deferred until the first
   `show()` call. Target: unmeasurable (<0.1ms) in lazy.nvim profile.
 - Debounce scroll-driven redraws (`WinScrolled`): single deferred redraw per burst,
-  never one redraw per event. Debounce interval is a config value with a sane default.
-  Target: image re-placed within one frame (~16ms) after scroll settles.
+  never one redraw per event. Debounce interval (`debounce_ms`, default 16ms) is a
+  config value with a sane default; a single isolated event redraws within that
+  window. A sustained burst (e.g. a held-key scroll, whose repeat rate can exceed
+  1/`debounce_ms`) is additionally capped by `redraw_throttle_ms` (default 100ms,
+  a distinct config value — see `docs/spec/renderer-placement.md`'s Lifecycle
+  section) to roughly one actual redraw per throttle window regardless of event
+  rate, with a guaranteed trailing redraw once the burst settles. Worst-case
+  latency from the last event to that final correcting redraw is `debounce_ms +
+  redraw_throttle_ms` (~116ms at defaults) while a burst is actively throttling —
+  an accepted trade-off against the alternative of one write per event (issue #31).
 - Re-placement of an already-transmitted image must reuse its ID (`a=p`) — never
   re-transmit pixel data on scroll/resize.
 - Cache transmitted images by `(path, mtime)`: re-showing a cached image is a

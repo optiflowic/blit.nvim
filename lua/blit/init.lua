@@ -14,11 +14,11 @@ end
 ---@return string? err
 function M.show(path, opts)
   local cfg = M._config or config.merge(nil)
-  local merged = vim.tbl_extend(
-    "force",
-    { max_file_bytes = cfg.max_file_bytes, debounce_ms = cfg.debounce_ms },
-    opts or {}
-  )
+  local merged = vim.tbl_extend("force", {
+    max_file_bytes = cfg.max_file_bytes,
+    debounce_ms = cfg.debounce_ms,
+    redraw_throttle_ms = cfg.redraw_throttle_ms,
+  }, opts or {})
   return renderer.show(path, merged)
 end
 

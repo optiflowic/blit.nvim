@@ -352,6 +352,23 @@ end
 local debounce_timer = nil
 local debounce_ms = 16
 
+-- Sustained-burst write-volume cap (issue #31): terminal key-repeat for a
+-- held scroll (<C-e>/<C-y>/j/k) fires WinScrolled roughly every 25-33ms —
+-- a gap *larger* than debounce_ms's default 16ms window — so the plain
+-- trailing-edge debounce above routinely completes its countdown before
+-- the next repeat arrives, meaning redraw_all() (and its full tty-write
+-- escape-sequence burst) fires on very close to every single scroll event
+-- during a sustained hold, not "a single deferred redraw per burst" as
+-- required above. throttle_ms caps actual redraw_all() invocations to
+-- roughly once per this window while events keep arriving faster than
+-- that, independent of debounce_ms — see docs/spec/renderer-placement.md's
+-- Lifecycle section for the full design and the accepted worst-case
+-- settle-latency trade-off (debounce_ms + throttle_ms instead of
+-- debounce_ms alone while a burst is actively throttling).
+local throttle_timer = nil
+local throttle_ms = 100
+local last_redraw_at = nil
+
 -- Forward-declared: redraw_all's pending-delete retry branch below needs to
 -- self-schedule another pass, but schedule_redraw's own definition (right
 -- after redraw_all) needs redraw_all to already exist as its timer
@@ -395,12 +412,47 @@ local function redraw_all()
   end
 end
 
+local function do_redraw()
+  last_redraw_at = vim.uv.now()
+  redraw_all()
+end
+
+-- ms remaining in the current throttle window; 0 (or less) once elapsed or
+-- if no redraw has run yet.
+---@return integer
+local function throttle_remaining()
+  if not last_redraw_at then
+    return 0
+  end
+  return throttle_ms - (vim.uv.now() - last_redraw_at)
+end
+
+-- debounce_timer's callback target. Runs redraw_all() immediately once
+-- outside the throttle window (the common single-event case, and a burst's
+-- first firing); otherwise arms a bounded catch-up fallback for the
+-- remainder of the window so a suppressed redraw is delayed, never lost —
+-- see the throttle_ms declaration above and docs/spec/renderer-placement.md's
+-- Lifecycle section for why this exists (issue #31).
+local function maybe_redraw()
+  local remaining = throttle_remaining()
+  if remaining <= 0 then
+    do_redraw()
+    return
+  end
+  if not throttle_timer then
+    throttle_timer = vim.uv.new_timer()
+  end
+  if not throttle_timer:is_active() then
+    throttle_timer:start(remaining, 0, vim.schedule_wrap(do_redraw))
+  end
+end
+
 function schedule_redraw()
   if not debounce_timer then
     debounce_timer = vim.uv.new_timer()
   end
   debounce_timer:stop()
-  debounce_timer:start(debounce_ms, 0, vim.schedule_wrap(redraw_all))
+  debounce_timer:start(debounce_ms, 0, vim.schedule_wrap(maybe_redraw))
 end
 
 -- Lifecycle: destroy ------------------------------------------------------
@@ -452,6 +504,12 @@ local function maybe_teardown_autocmds()
     debounce_timer:close()
     debounce_timer = nil
   end
+  if throttle_timer then
+    throttle_timer:stop()
+    throttle_timer:close()
+    throttle_timer = nil
+  end
+  last_redraw_at = nil
   if autocmds_ready then
     pcall(vim.api.nvim_del_augroup_by_name, AUGROUP)
     autocmds_ready = false
@@ -573,6 +631,9 @@ end
 ---@field z_index? integer
 ---@field max_file_bytes? integer defaults to blit.config.defaults.max_file_bytes
 ---@field debounce_ms? integer defaults to the last configured value (initially 16)
+---@field redraw_throttle_ms? integer caps sustained-burst redraw cadence;
+---defaults to the last configured value (initially 100) — see
+---docs/spec/renderer-placement.md's Lifecycle section
 
 ---@param path string
 ---@param opts blit.ShowOpts
@@ -590,6 +651,7 @@ function M.show(path, opts)
     z_index = { opts.z_index, "number", true },
     max_file_bytes = { opts.max_file_bytes, "number", true },
     debounce_ms = { opts.debounce_ms, "number", true },
+    redraw_throttle_ms = { opts.redraw_throttle_ms, "number", true },
   })
 
   local caps = M._detect_fn()
@@ -614,6 +676,7 @@ function M.show(path, opts)
   local col = opts.col or 0
 
   debounce_ms = opts.debounce_ms or debounce_ms
+  throttle_ms = opts.redraw_throttle_ms or throttle_ms
 
   local key = cache_key(path, stat.mtime)
   local entry = acquire_idle_entry(key, caps.terminal)

@@ -80,6 +80,16 @@ WezTerm (and Ghostty when available) before tagging a release.
       few debounce intervals with zero further input should still be enough
       to clear it. Pixels stuck past that point (or a second `clear_all()`
       call needed to clear them) are a regression.
+- [ ] Hold `<C-e>` (or `<C-y>`/`j`/`k`) continuously for 10+ seconds with an
+      image shown. WezTerm should not freeze or crash, and the image should
+      reposition/hide correctly once scrolling stops (issue #31 — root
+      cause inside WezTerm itself is unconfirmed as of this checklist item;
+      this checks whether capping blit's sustained-burst redraw volume via
+      `redraw_throttle_ms` (`docs/spec/renderer-placement.md`'s Lifecycle
+      section) resolves it in practice). If WezTerm still crashes despite
+      this mitigation, that points to the root cause being outside blit's
+      control — file/update the upstream WezTerm report instead of treating
+      this as a blit regression.
 
 ## Ghostty
 

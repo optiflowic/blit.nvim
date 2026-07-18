@@ -528,4 +528,232 @@ T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function
   MiniTest.expect.equality(show_all:find("i=" .. handle.id, 1, true) ~= nil, true)
 end
 
+-- Sustained-burst throttle (issue #31): terminal key-repeat for a held
+-- scroll fires WinScrolled faster than the plain trailing-edge debounce can
+-- coalesce (see lua/blit/renderer.lua's throttle_ms comment), so these
+-- cases exercise the throttle gate directly with scaled-down
+-- debounce_ms/redraw_throttle_ms values for test speed.
+
+T["redraw throttle"] = MiniTest.new_set()
+
+T["redraw throttle"]["caps redraw invocations during a sustained WinScrolled burst (issue #31)"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  local handle = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 1,
+    debounce_ms = 5,
+    redraw_throttle_ms = 40,
+  })
+  MiniTest.expect.equality(handle.visible, true)
+
+  captured = {}
+  for _ = 1, 20 do
+    vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+    vim.uv.sleep(10)
+  end
+  -- let any trailing catch-up redraw land after the burst ends.
+  vim.wait(300)
+
+  MiniTest.expect.equality(#captured >= 1, true)
+  MiniTest.expect.equality(#captured <= 10, true)
+end
+
+T["redraw throttle"]["still redraws promptly for a single isolated event"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 2,
+    debounce_ms = 5,
+    redraw_throttle_ms = 40,
+  })
+  MiniTest.expect.equality(handle.visible, true)
+
+  captured = {}
+  local start = vim.uv.hrtime()
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(200, function()
+    return #captured > 0
+  end)
+  local elapsed_ms = (vim.uv.hrtime() - start) / 1e6
+
+  MiniTest.expect.equality(#captured, 1)
+  -- comfortably under redraw_throttle_ms (40) — proves the throttle gate's
+  -- immediate-fire branch, not its catch-up fallback, handled this.
+  MiniTest.expect.equality(elapsed_ms < 35, true)
+end
+
+T["redraw throttle"]["guarantees a trailing redraw reflecting the final scrolled state after a burst ends"] = function()
+  local buf, win = setup_floating(numbered_lines(30), 20, 10)
+  local handle = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 1,
+    debounce_ms = 5,
+    redraw_throttle_ms = 40,
+  })
+  MiniTest.expect.equality(handle.visible, true)
+
+  captured = {}
+  for _ = 1, 10 do
+    vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+    vim.uv.sleep(8)
+  end
+  -- final event of the burst actually scrolls the anchor off screen.
+  vim.api.nvim_win_call(win, function()
+    vim.fn.winrestview({ topline = 20 })
+  end)
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+
+  vim.wait(300, function()
+    return handle.visible == false
+  end)
+
+  MiniTest.expect.equality(handle.visible, false)
+  local last = table.concat(captured[#captured], "")
+  MiniTest.expect.equality(last, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+end
+
+T["redraw throttle"]["a fresh burst after a real idle gap is throttled independently of a prior burst"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 2,
+    debounce_ms = 5,
+    redraw_throttle_ms = 40,
+  })
+  MiniTest.expect.equality(handle.visible, true)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(200, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(#captured, 1)
+
+  -- idle gap comfortably exceeding redraw_throttle_ms + debounce_ms.
+  vim.uv.sleep(80)
+
+  captured = {}
+  local start = vim.uv.hrtime()
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(200, function()
+    return #captured > 0
+  end)
+  local elapsed_ms = (vim.uv.hrtime() - start) / 1e6
+
+  MiniTest.expect.equality(#captured, 1)
+  MiniTest.expect.equality(elapsed_ms < 35, true)
+end
+
+T["redraw throttle"]["does not carry throttle state across a full idle teardown into a new show() session"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 2,
+    debounce_ms = 5,
+    redraw_throttle_ms = 1000,
+  })
+  MiniTest.expect.equality(handle.visible, true)
+
+  -- engage the (very long) throttle window.
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(200, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(#captured, 1)
+
+  renderer.clear_all()
+
+  local handle2 = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 2,
+    debounce_ms = 5,
+    redraw_throttle_ms = 1000,
+  })
+  MiniTest.expect.equality(handle2.visible, true)
+
+  captured = {}
+  local start = vim.uv.hrtime()
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(200, function()
+    return #captured > 0
+  end)
+  local elapsed_ms = (vim.uv.hrtime() - start) / 1e6
+
+  -- if last_redraw_at leaked across the teardown, this would be suppressed
+  -- for close to the stale 1000ms window instead of firing promptly.
+  MiniTest.expect.equality(#captured, 1)
+  MiniTest.expect.equality(elapsed_ms < 500, true)
+end
+
+T["redraw throttle"]["show()'s issue #18 catch-up redraw still fires when called during an active throttle window"] = function()
+  local buf, win = setup_floating(numbered_lines(30), 20, 25)
+  local a = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 10,
+    debounce_ms = 5,
+    redraw_throttle_ms = 150,
+  })
+  MiniTest.expect.equality(a.visible, true)
+
+  -- engage an active throttle window on A.
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(200, function()
+    return #captured > 0
+  end)
+  MiniTest.expect.equality(#captured, 1)
+
+  captured = {}
+  local b = renderer.show(tmp_path, {
+    width = 5,
+    height = 3,
+    buf = buf,
+    win = win,
+    lnum = 1,
+    debounce_ms = 5,
+    redraw_throttle_ms = 150,
+  })
+  MiniTest.expect.equality(b.visible, true)
+  MiniTest.expect.no_equality(a.id, b.id)
+
+  local function a_was_replaced()
+    for _, seq in ipairs(captured) do
+      local all = table.concat(seq, "")
+      if all:find("a=p", 1, true) and all:find("i=" .. a.id, 1, true) then
+        return true
+      end
+    end
+    return false
+  end
+
+  -- b's show() calls schedule_redraw() (#M._handles > 1, issue #18) while a
+  -- throttle window is active — the catch-up pass for A must still land,
+  -- bounded by the throttle window rather than dropped or indefinitely
+  -- delayed.
+  vim.wait(500, a_was_replaced)
+  MiniTest.expect.equality(a_was_replaced(), true)
+end
+
 return T
