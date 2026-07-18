@@ -61,6 +61,14 @@ WezTerm (and Ghostty when available) before tagging a release.
       invisible specifically so a later scroll gets another chance to
       clear a stuck placement (`docs/spec/renderer-placement.md`'s
       Lifecycle section); pixels stuck past that point are a regression.
+- [ ] `show()` an image, then `clear()` (or `clear_all()`) it, *without*
+      scrolling or otherwise triggering a redraw afterward. No stuck image
+      pixels should remain visible at that location, even immediately after
+      the call returns — `destroy_handle` self-schedules a bounded resend of
+      its own `a=d` for exactly this case (issue #27), so waiting up to a
+      few debounce intervals with zero further input should still be enough
+      to clear it. Pixels stuck past that point (or a second `clear_all()`
+      call needed to clear them) are a regression.
 
 ## Ghostty
 
