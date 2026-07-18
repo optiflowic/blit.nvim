@@ -584,6 +584,15 @@ function M.show(path, opts)
     end
   end
 
+  -- A newly-anchored virt_lines block can shift the screen position of
+  -- every handle anchored below/around it in the same window. Catch up any
+  -- pre-existing handles via the same debounced redraw pass used for
+  -- WinScrolled/WinResized; redraw_all() never transmits, so including the
+  -- handle just created above is safe (issue #18).
+  if #M._handles > 1 then
+    schedule_redraw()
+  end
+
   return handle
 end
 

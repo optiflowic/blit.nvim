@@ -78,6 +78,15 @@ before `_write_fn`) rather than a position difference — the actual
 pixel-level fix can only be confirmed on a real terminal, per
 `docs/manual-testing.md`.
 
+`M.show()` also calls the existing debounced `schedule_redraw()` at the end
+of a successful call whenever more than one handle exists (see "Lifecycle"
+below) — a newly-reserved `virt_lines` block can shift where every
+*other*, already-placed handle in the same window now renders, and this
+catches those up too (issue #18). `redraw_all()` never transmits, only
+repositions/hides via `a=p`/`a=d`, so re-including the handle `show()` just
+created in that same debounced pass is safe — the worst case is one
+redundant, idempotent `a=p` for it.
+
 ## Visibility policy: fully visible or not shown at all
 
 When an image's reserved row/col span is not **entirely** contained within
@@ -186,7 +195,11 @@ Two distinct kinds of state transition, kept separate:
   — single deferred recompute per burst, per AGENTS.md's performance rule):
   recomputes visibility/position for every still-anchored handle and
   toggles its placement (`a=p` to show/reposition, `a=d` to hide). Never
-  transmits, never destroys a handle.
+  transmits, never destroys a handle. `M.show()` also triggers this same
+  debounced pass at the end of a successful call whenever more than one
+  handle exists, since its new `virt_lines` reservation can shift where
+  sibling handles now render (issue #18) — see "Forcing a redraw before the
+  first placement" above.
 - **Destroy** (`BufWinLeave` for the specific `(buf, win)` pair,
   `WinClosed` for a closing window, `BufWipeout` for a wiped buffer,
   `M.clear()`/`M.clear_all()`, and `VimLeavePre`): removes the extmark,
