@@ -521,6 +521,8 @@ local debounce_ms = 16
 local schedule_redraw
 
 local function redraw_all()
+  local caps = M._detect_fn()
+
   -- Forces the same synchronous screen redraw M.show() already forces before
   -- its own first placement (issue #19) — Neovim's own redraw-to-tty output
   -- is scheduled asynchronously, and right after a real terminal resize
@@ -533,10 +535,14 @@ local function redraw_all()
   -- forcing the redraw here first, a real Ghostty resize could sit
   -- permanently invisible until some unrelated later event (e.g. a scroll)
   -- happened to land after Neovim's own internal redraw had caught up on
-  -- its own.
-  M._redraw_fn()
+  -- its own. Scoped to Ghostty only: kitty/WezTerm never hit that permanent-
+  -- invisible failure mode (the throwaway a=d self-heal above already covers
+  -- them), so forcing this synchronous redraw on every debounced pass for
+  -- them too would add cost with no correctness benefit.
+  if caps.terminal == "ghostty" then
+    M._redraw_fn()
+  end
 
-  local caps = M._detect_fn()
   for _, handle in ipairs(M._handles) do
     local visible, row, col = compute_placement(handle)
     if visible then
