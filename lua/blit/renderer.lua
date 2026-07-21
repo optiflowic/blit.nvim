@@ -126,6 +126,16 @@ M.cache_key = cache_key
 -- never idle), so without this it stayed permanently blank once its data
 -- was discarded — see "Redraw" below and
 -- docs/spec/renderer-placement.md's Transmission cache section.
+--
+-- This one fact — which terminal actually has this quirk — is centralized
+-- here rather than compared inline at each call site, so acquire_idle_entry,
+-- redraw_all's stale check, and its resize-race redraw guard all agree on
+-- the same definition as more terminals/quirks are added over time.
+---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
+---@return boolean
+local function discards_pixels_on_resize(terminal_name)
+  return terminal_name == "ghostty"
+end
 
 -- Destroy-path delete retry queue --------------------------------------------
 -- destroy_handle's a=d is as susceptible to WezTerm's scroll-driven
@@ -169,7 +179,8 @@ local function acquire_idle_entry(key, terminal_name)
     if entry.active then
       i = i + 1
     elseif
-      terminal_name == "ghostty" and (entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns)
+      discards_pixels_on_resize(terminal_name)
+      and (entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns)
     then
       free_id(entry.id)
       table.remove(entries, i)
@@ -398,7 +409,7 @@ end
 ---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
 ---@return boolean
 local function ghostty_entry_stale(handle, terminal_name)
-  if terminal_name ~= "ghostty" then
+  if not discards_pixels_on_resize(terminal_name) then
     return false
   end
   local entry = find_cache_entry(handle.cache_key, handle.id)
@@ -539,7 +550,7 @@ local function redraw_all()
   -- invisible failure mode (the throwaway a=d self-heal above already covers
   -- them), so forcing this synchronous redraw on every debounced pass for
   -- them too would add cost with no correctness benefit.
-  if caps.terminal == "ghostty" then
+  if discards_pixels_on_resize(caps.terminal) then
     M._redraw_fn()
   end
 
