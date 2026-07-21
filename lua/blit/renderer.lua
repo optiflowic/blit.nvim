@@ -408,13 +408,19 @@ local function ghostty_entry_stale(handle, terminal_name)
   return entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns
 end
 
--- Re-transmits a still-visible handle's pixel data under its existing id
--- (overwriting whatever Ghostty discarded) and updates its cache entry to
--- the current terminal size so subsequent passes don't re-trigger this
--- until another real resize happens. This is the one place outside
--- `M.show()` that re-transmits rather than reusing `a=p` — see AGENTS.md's
--- performance rule on reuse-over-retransmit for why that's normally
--- forbidden and the narrow, Ghostty-only exception carved out here.
+-- Re-transmits a still-visible handle's pixel data under a *fresh* id and
+-- updates the handle/cache to point at it, freeing the old, now-dead one —
+-- confirmed via manual testing on a real Ghostty resize (issue #34) that
+-- simply re-`a=T`-ing under the SAME id Ghostty already discarded does NOT
+-- bring the placement back, even though the write itself reports success
+-- (`q=2` suppresses all responses, so blit has no way to detect this other
+-- than the empirical result). This mirrors `acquire_idle_entry`'s existing
+-- Ghostty eviction above exactly: that path never reuses a stale id either —
+-- it frees it and lets a fresh `alloc_id()` hand out a new one on the next
+-- transmit. This is the one place outside `M.show()` that transmits rather
+-- than reusing `a=p` — see AGENTS.md's performance rule on reuse-over-
+-- retransmit for why that's normally forbidden and the narrow, Ghostty-only
+-- exception carved out here.
 ---@param handle blit.Handle
 ---@param row integer
 ---@param col integer
@@ -426,26 +432,81 @@ local function retransmit_and_place(handle, row, col)
     return false
   end
 
-  local sequences = { terminal.build_save_cursor(), terminal.build_move_cursor(row, col) }
+  local new_id = alloc_id()
+  if not new_id then
+    hide_existing(handle)
+    return false
+  end
+
+  local old_id = handle.id
+  local sequences = {
+    terminal.build_delete(old_id, { free_data = true }),
+    terminal.build_save_cursor(),
+    terminal.build_move_cursor(row, col),
+  }
   vim.list_extend(
     sequences,
     terminal.build_transmit(
       bytes,
-      { id = handle.id, action = "T", placement = placement_opts(handle) }
+      { id = new_id, action = "T", placement = placement_opts(handle) }
     )
   )
   table.insert(sequences, terminal.build_restore_cursor())
 
   local ok = M._write_fn(sequences)
-  handle.visible = ok and true or false
   if ok then
-    local entry = find_cache_entry(handle.cache_key, handle.id)
-    if entry then
-      entry.lines = vim.o.lines
-      entry.columns = vim.o.columns
+    handle.id = new_id
+    drop_cache_entry(handle.cache_key, old_id)
+    free_id(old_id)
+    register_cache_entry(handle.cache_key, new_id)
+  else
+    free_id(new_id)
+  end
+  handle.visible = ok and true or false
+  return ok
+end
+
+-- Ghostty resize settle timer -------------------------------------------------
+-- A real OS-window drag resize fires one `WinResized` per distinct cell-grid
+-- size it passes through, not just once at the final size — confirmed via
+-- manual testing (issue #34) that even a single, quick drag gesture crosses
+-- several such sizes (observed: 6 within under a second). Retransmitting
+-- (`a=T`, full base64 payload + a fresh id swap) on every one of those, back
+-- to back, was observed to make Ghostty's own recovery unreliable — the
+-- image came back on some redraw passes and not others, seemingly a race in
+-- Ghostty's own rendering pipeline under rapid successive placement commands
+-- for the same region rather than anything blit's escape-sequence content
+-- gets wrong. Repositioning/hiding (`a=p`/`a=d`) every pass during the
+-- drag is still cheap and stays on the normal per-pass debounce above; only
+-- the expensive retransmit is pushed onto its own longer, separately-reset
+-- timer so it fires (at most) once the resize has actually stopped for
+-- `M._ghostty_settle_ms`, rather than once per intermediate size. 100ms was
+-- confirmed via repeated manual testing on a real Ghostty window to be long
+-- enough to avoid the back-to-back-retransmit instability above while still
+-- feeling responsive once the drag stops.
+local ghostty_retransmit_timer = nil
+M._ghostty_settle_ms = 100
+
+local function ghostty_retransmit_pass()
+  local caps = M._detect_fn()
+  for _, handle in ipairs(M._handles) do
+    local visible, row, col = compute_placement(handle)
+    if visible and ghostty_entry_stale(handle, caps.terminal) then
+      retransmit_and_place(handle, row, col)
     end
   end
-  return ok
+end
+
+local function schedule_ghostty_retransmit()
+  if not ghostty_retransmit_timer then
+    ghostty_retransmit_timer = vim.uv.new_timer()
+  end
+  ghostty_retransmit_timer:stop()
+  ghostty_retransmit_timer:start(
+    M._ghostty_settle_ms,
+    0,
+    vim.schedule_wrap(ghostty_retransmit_pass)
+  )
 end
 
 -- Redraw (debounced, never transmits except Ghostty's resize self-heal) ------
@@ -460,12 +521,28 @@ local debounce_ms = 16
 local schedule_redraw
 
 local function redraw_all()
+  -- Forces the same synchronous screen redraw M.show() already forces before
+  -- its own first placement (issue #19) — Neovim's own redraw-to-tty output
+  -- is scheduled asynchronously, and right after a real terminal resize
+  -- (WinResized fired by an actual SIGWINCH, not a synthetic autocmd/test
+  -- resize) `vim.fn.screenpos()` below can still race ahead of it and report
+  -- a stale, invisible position for a handle that is geometrically fine.
+  -- Previously this only ever cost one throwaway `a=d` (self-healing next
+  -- pass, since redraw_all never transmitted), but issue #34's Ghostty
+  -- retransmit path below only ever runs on the `visible` branch — without
+  -- forcing the redraw here first, a real Ghostty resize could sit
+  -- permanently invisible until some unrelated later event (e.g. a scroll)
+  -- happened to land after Neovim's own internal redraw had caught up on
+  -- its own.
+  M._redraw_fn()
+
   local caps = M._detect_fn()
   for _, handle in ipairs(M._handles) do
     local visible, row, col = compute_placement(handle)
     if visible then
       if ghostty_entry_stale(handle, caps.terminal) then
-        retransmit_and_place(handle, row, col)
+        place_existing(handle, row, col)
+        schedule_ghostty_retransmit()
       else
         place_existing(handle, row, col)
       end
@@ -557,6 +634,11 @@ local function maybe_teardown_autocmds()
     debounce_timer:stop()
     debounce_timer:close()
     debounce_timer = nil
+  end
+  if ghostty_retransmit_timer then
+    ghostty_retransmit_timer:stop()
+    ghostty_retransmit_timer:close()
+    ghostty_retransmit_timer = nil
   end
   if autocmds_ready then
     pcall(vim.api.nvim_del_augroup_by_name, AUGROUP)
@@ -831,6 +913,7 @@ function M._reset()
   M._redraw_fn = function()
     vim.cmd("redraw")
   end
+  M._ghostty_settle_ms = 100
 end
 
 return M

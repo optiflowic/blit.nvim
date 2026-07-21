@@ -100,7 +100,11 @@ WezTerm (and Ghostty when available) before tagging a release.
       cache unconditionally.
 - [ ] `show()` an image and leave it visible (do not `clear()` it), then
       resize the Ghostty *terminal window itself* by dragging the OS window
-      edge, even by a small amount. The image must reposition/redisplay
-      correctly, not disappear permanently (issue #34). Repeat the resize a
-      second and third time in a row without any other input in between —
-      it must keep recovering every time, not just the first.
+      edge, even by a small amount. The image must reappear within roughly a
+      few hundred milliseconds of the drag stopping, not disappear
+      permanently (issue #34). Try both a single quick drag and a slower,
+      continuous one that crosses several cell sizes along the way — both
+      must recover, and the image should not flicker/fail intermittently
+      partway through a single continuous drag. Repeat the resize a second
+      and third time in a row without any other input in between — it must
+      keep recovering every time, not just the first.
