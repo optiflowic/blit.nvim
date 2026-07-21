@@ -34,6 +34,7 @@ local T = MiniTest.new_set({
       renderer._detect_fn = function()
         return { terminal = "kitty", tmux = false, gui_embed = false, supported = true }
       end
+      renderer._ghostty_settle_ms = 5
       make_png_file()
     end,
     post_case = function()
@@ -526,6 +527,104 @@ T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function
   local show_all = table.concat(captured[1], "")
   MiniTest.expect.equality(show_all:find("a=p", 1, true) ~= nil, true)
   MiniTest.expect.equality(show_all:find("i=" .. handle.id, 1, true) ~= nil, true)
+end
+
+---@return boolean
+local function any_captured_has(needle)
+  for _, seq in ipairs(captured) do
+    if table.concat(seq, ""):find(needle, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+T["redraw"]["ghostty: retransmits a still-visible handle after a terminal resize (issue #34)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+  local original_id = handle.id
+
+  -- Kept changed until the retransmit pass has actually run: the settle
+  -- timer's own `ghostty_entry_stale` check (issue #34) re-reads
+  -- `vim.o.columns` at fire time, so restoring it early would make the
+  -- handle's cache entry look fresh again and mask the retransmit.
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(1000, function()
+    return any_captured_has("a=T")
+  end)
+  vim.o.columns = original_columns
+
+  MiniTest.expect.equality(handle.visible, true)
+  MiniTest.expect.no_equality(handle.id, original_id)
+  MiniTest.expect.equality(any_captured_has("a=T"), true)
+end
+
+T["redraw"]["ghostty: does not retransmit a still-visible handle when size is unchanged"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+  local original_id = handle.id
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  -- No stale entry was ever detected, so no settle timer was even
+  -- scheduled — waiting past `_ghostty_settle_ms` confirms that rather
+  -- than just that the first (reposition) write hasn't arrived yet.
+  vim.wait(100)
+
+  MiniTest.expect.equality(handle.visible, true)
+  MiniTest.expect.equality(handle.id, original_id)
+  MiniTest.expect.equality(any_captured_has("a=T"), false)
+  local first_all = table.concat(captured[1], "")
+  MiniTest.expect.equality(first_all:find("a=p", 1, true) ~= nil, true)
+end
+
+T["redraw"]["non-ghostty: never retransmits a still-visible handle after a resize"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+  local original_id = handle.id
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  vim.wait(100)
+  vim.o.columns = original_columns
+
+  MiniTest.expect.equality(handle.visible, true)
+  MiniTest.expect.equality(handle.id, original_id)
+  MiniTest.expect.equality(any_captured_has("a=T"), false)
+  local first_all = table.concat(captured[1], "")
+  MiniTest.expect.equality(first_all:find("a=p", 1, true) ~= nil, true)
 end
 
 return T
