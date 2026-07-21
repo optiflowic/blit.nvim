@@ -98,3 +98,9 @@ WezTerm (and Ghostty when available) before tagging a release.
       `show()` should reuse the cached id with a placement-only `a=p`, no
       retransmission — confirms the resize check isn't discarding the
       cache unconditionally.
+- [ ] `show()` an image and leave it visible (do not `clear()` it), then
+      resize the Ghostty *terminal window itself* by dragging the OS window
+      edge, even by a small amount. The image must reposition/redisplay
+      correctly, not disappear permanently (issue #34). Repeat the resize a
+      second and third time in a row without any other input in between —
+      it must keep recovering every time, not just the first.

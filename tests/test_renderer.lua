@@ -528,4 +528,79 @@ T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function
   MiniTest.expect.equality(show_all:find("i=" .. handle.id, 1, true) ~= nil, true)
 end
 
+T["redraw"]["ghostty: retransmits a still-visible handle after a terminal resize (issue #34)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  vim.o.columns = original_columns
+
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find("i=" .. handle.id, 1, true) ~= nil, true)
+end
+
+T["redraw"]["ghostty: does not retransmit a still-visible handle when size is unchanged"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true), nil)
+  MiniTest.expect.equality(all:find("a=p", 1, true) ~= nil, true)
+end
+
+T["redraw"]["non-ghostty: never retransmits a still-visible handle after a resize"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+  vim.o.columns = original_columns
+
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true), nil)
+  MiniTest.expect.equality(all:find("a=p", 1, true) ~= nil, true)
+end
+
 return T

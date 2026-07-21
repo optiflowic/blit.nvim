@@ -260,12 +260,31 @@ without revisiting that rule. Kitty and WezTerm are unaffected either way
 — `terminal_name ~= "ghostty"` short-circuits the check, so their existing
 idle-cache-reuse behavior and cost are unchanged.
 
-Out of scope for this mitigation: a handle that stays visible/active
-across a Ghostty resize (never cleared) is not covered — issue #24's own
-repro clears the handle before resizing, and pre-emptively re-transmitting
-every currently-displayed image on every resize (to also cover that case)
-was judged too costly to take on speculatively without a report confirming
-it actually happens.
+**Ghostty exception, part two: a still-visible handle is re-transmitted in
+place on the redraw path once a resize is detected.** The mitigation above
+only covers a handle that gets cleared before the next `show()` — it left a
+handle that stays visible/active across a Ghostty resize (never cleared)
+uncovered, and issue #34 confirmed this actually happens: the placement
+goes permanently blank on the very next resize, with no `:redraw!`,
+scroll-out/scroll-back, or further resize able to restore it, since nothing
+in `redraw_all()`'s normal `a=p`/`a=d` toggling ever re-transmits. `redraw_all()`
+now checks, for each handle it finds visible, whether `caps.terminal ==
+"ghostty"` and that handle's own cache entry's recorded
+`vim.o.lines`/`vim.o.columns` differs from the current values (the exact
+same signal `acquire_idle_entry` uses above, just read instead of also
+gating reuse — see `ghostty_entry_stale()`/`retransmit_and_place()` in
+`renderer.lua`). On a match it re-reads the file and re-transmits (`a=T`)
+under the handle's existing id — overwriting whatever Ghostty discarded —
+then updates the cache entry's recorded size so later passes don't
+re-trigger until another real resize. This is a deliberate, narrow
+exception to AGENTS.md's "never re-transmit pixel data on scroll/resize"
+performance rule: seeing that exact comparison come back true only ever
+happens right after a genuine resize (scroll-only redraw passes never flip
+it), so the cost is bounded to once per real Ghostty resize per visible
+handle — see AGENTS.md's Performance Rules section for the carved-out
+wording. Kitty and WezTerm are unaffected: `ghostty_entry_stale()`
+short-circuits to `false` for any other terminal, so their redraw path is
+unchanged.
 
 ## Lifecycle
 
@@ -276,7 +295,10 @@ Two distinct kinds of state transition, kept separate:
   AGENTS.md's performance rule):
   recomputes visibility/position for every still-anchored handle and
   toggles its placement (`a=p` to show/reposition, `a=d` to hide). Never
-  transmits, never destroys a handle. `M.show()` also triggers this same
+  destroys a handle, and never transmits except the narrow Ghostty resize
+  self-heal described in "Transmission cache" above (`ghostty_entry_stale()`
+  gates it to a confirmed Ghostty resize; every other terminal and every
+  scroll-only pass stays reposition/hide-only). `M.show()` also triggers this same
   debounced pass at the end of a successful call whenever more than one
   handle exists, since its new `virt_lines` reservation can shift where
   sibling handles now render (issue #18) — see "Forcing a redraw before the

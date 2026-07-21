@@ -119,6 +119,13 @@ M.cache_key = cache_key
 -- Transmission cache section for why and its accepted false-negative case
 -- (a resize that lands back on the exact original size in between is
 -- indistinguishable from no resize at all).
+--
+-- The same size-mismatch signal also drives redraw_all's still-visible-
+-- handle path below (issue #34): a handle that stays active/displayed
+-- across a Ghostty resize is not touched by acquire_idle_entry at all (it's
+-- never idle), so without this it stayed permanently blank once its data
+-- was discarded — see "Redraw" below and
+-- docs/spec/renderer-placement.md's Transmission cache section.
 
 -- Destroy-path delete retry queue --------------------------------------------
 -- destroy_handle's a=d is as susceptible to WezTerm's scroll-driven
@@ -184,6 +191,22 @@ end
 local function register_cache_entry(key, id)
   cache[key] = cache[key] or {}
   table.insert(cache[key], { id = id, active = true, lines = vim.o.lines, columns = vim.o.columns })
+end
+
+---@param key string
+---@param id integer
+---@return { id: integer, active: boolean, lines: integer, columns: integer }?
+local function find_cache_entry(key, id)
+  local entries = cache[key]
+  if not entries then
+    return nil
+  end
+  for _, entry in ipairs(entries) do
+    if entry.id == id then
+      return entry
+    end
+  end
+  return nil
 end
 
 ---@param key string
@@ -311,6 +334,24 @@ local function build_virt_lines(height)
   return lines
 end
 
+-- File reading --------------------------------------------------------------
+
+---@param path string
+---@return string? bytes
+---@return string? err
+local function read_file(path)
+  local f, open_err = io.open(path, "rb")
+  if not f then
+    return nil, "blit: cannot open " .. path .. ": " .. tostring(open_err)
+  end
+  local bytes = f:read("*a")
+  f:close()
+  if not bytes then
+    return nil, "blit: failed to read " .. path
+  end
+  return bytes
+end
+
 -- Placement / hide --------------------------------------------------------
 
 ---@param handle blit.Handle
@@ -347,7 +388,67 @@ local function hide_existing(handle)
   handle.visible = false
 end
 
--- Redraw (debounced, never transmits, never destroys) ------------------------
+-- On Ghostty, a still-visible handle's transmitted data can have been
+-- silently discarded by the same real terminal resize acquire_idle_entry
+-- guards against for idle entries (issue #24/#34) — see the "Transmission
+-- cache" comment above. There is no response to detect this by, so the
+-- only signal available is the same one: the handle's cache entry was
+-- recorded against a `vim.o.lines`/`vim.o.columns` that no longer matches.
+---@param handle blit.Handle
+---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
+---@return boolean
+local function ghostty_entry_stale(handle, terminal_name)
+  if terminal_name ~= "ghostty" then
+    return false
+  end
+  local entry = find_cache_entry(handle.cache_key, handle.id)
+  if not entry then
+    return false
+  end
+  return entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns
+end
+
+-- Re-transmits a still-visible handle's pixel data under its existing id
+-- (overwriting whatever Ghostty discarded) and updates its cache entry to
+-- the current terminal size so subsequent passes don't re-trigger this
+-- until another real resize happens. This is the one place outside
+-- `M.show()` that re-transmits rather than reusing `a=p` — see AGENTS.md's
+-- performance rule on reuse-over-retransmit for why that's normally
+-- forbidden and the narrow, Ghostty-only exception carved out here.
+---@param handle blit.Handle
+---@param row integer
+---@param col integer
+---@return boolean ok
+local function retransmit_and_place(handle, row, col)
+  local bytes = read_file(handle.path)
+  if not bytes then
+    hide_existing(handle)
+    return false
+  end
+
+  local sequences = { terminal.build_save_cursor(), terminal.build_move_cursor(row, col) }
+  vim.list_extend(
+    sequences,
+    terminal.build_transmit(
+      bytes,
+      { id = handle.id, action = "T", placement = placement_opts(handle) }
+    )
+  )
+  table.insert(sequences, terminal.build_restore_cursor())
+
+  local ok = M._write_fn(sequences)
+  handle.visible = ok and true or false
+  if ok then
+    local entry = find_cache_entry(handle.cache_key, handle.id)
+    if entry then
+      entry.lines = vim.o.lines
+      entry.columns = vim.o.columns
+    end
+  end
+  return ok
+end
+
+-- Redraw (debounced, never transmits except Ghostty's resize self-heal) ------
 
 local debounce_timer = nil
 local debounce_ms = 16
@@ -359,10 +460,15 @@ local debounce_ms = 16
 local schedule_redraw
 
 local function redraw_all()
+  local caps = M._detect_fn()
   for _, handle in ipairs(M._handles) do
     local visible, row, col = compute_placement(handle)
     if visible then
-      place_existing(handle, row, col)
+      if ghostty_entry_stale(handle, caps.terminal) then
+        retransmit_and_place(handle, row, col)
+      else
+        place_existing(handle, row, col)
+      end
     else
       -- Resend the hide command unconditionally, even if handle.visible is
       -- already false from a prior pass — a successful M._write_fn() call
@@ -533,24 +639,6 @@ local function ensure_autocmds()
     group = group,
     callback = on_vim_leave_pre,
   })
-end
-
--- File reading --------------------------------------------------------------
-
----@param path string
----@return string? bytes
----@return string? err
-local function read_file(path)
-  local f, open_err = io.open(path, "rb")
-  if not f then
-    return nil, "blit: cannot open " .. path .. ": " .. tostring(open_err)
-  end
-  local bytes = f:read("*a")
-  f:close()
-  if not bytes then
-    return nil, "blit: failed to read " .. path
-  end
-  return bytes
 end
 
 ---@param v any

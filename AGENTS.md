@@ -80,7 +80,16 @@ Rules:
   never one redraw per event. Debounce interval is a config value with a sane default.
   Target: image re-placed within one frame (~16ms) after scroll settles.
 - Re-placement of an already-transmitted image must reuse its ID (`a=p`) — never
-  re-transmit pixel data on scroll/resize.
+  re-transmit pixel data on scroll/resize. Accepted exception: Ghostty silently
+  discards a transmitted image's pixel data behind its id across a real terminal
+  window resize, with no error response to detect it by (issues #24, #34).
+  `renderer.lua`'s debounced redraw path may re-transmit (`a=T`) a still-visible
+  handle's data, but only when it detects this exact condition — `caps.terminal
+  == "ghostty"` and the handle's cache entry was recorded against a
+  `vim.o.lines`/`vim.o.columns` that no longer matches the current values — see
+  `docs/spec/renderer-placement.md`'s Transmission cache section. This only ever
+  fires once per confirmed Ghostty resize per visible handle; kitty, WezTerm, and
+  scroll-only redraw passes on any terminal are unaffected.
 - Cache transmitted images by `(path, mtime)`: re-showing a cached image is a
   placement only. Drop base64 payloads after transmission; keep only IDs and
   geometry in Lua memory.
