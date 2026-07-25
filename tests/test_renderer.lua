@@ -904,6 +904,51 @@ T["redraw"]["ghostty: retransmits a still-visible handle after a terminal resize
   MiniTest.expect.equality(any_captured_has("a=T"), true)
 end
 
+T["redraw"]["ghostty: retries a failed retransmit without a further resize event (issue #37)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+  local original_id = handle.id
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+
+  -- Fails exactly the first retransmit attempt (simulating, e.g.,
+  -- write_all() exhausting its bounded EAGAIN retries — see terminal.lua)
+  -- to confirm ghostty_retransmit_pass self-reschedules another attempt
+  -- (issue #37) instead of leaving the handle stale until an unrelated
+  -- future WinResized/WinScrolled event happens to arrive.
+  local transmit_attempts = 0
+  renderer._write_fn = function(sequences)
+    table.insert(captured, sequences)
+    if table.concat(sequences, ""):find("a=T", 1, true) then
+      transmit_attempts = transmit_attempts + 1
+      if transmit_attempts == 1 then
+        return false
+      end
+    end
+    return true
+  end
+
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(1000, function()
+    return transmit_attempts >= 2
+  end)
+  vim.o.columns = original_columns
+
+  MiniTest.expect.equality(transmit_attempts, 2)
+  MiniTest.expect.equality(handle.visible, true)
+  MiniTest.expect.no_equality(handle.id, original_id)
+end
+
 T["redraw"]["ghostty: does not retransmit a still-visible handle when size is unchanged"] = function()
   renderer._detect_fn = function()
     return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }

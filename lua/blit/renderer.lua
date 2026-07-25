@@ -679,17 +679,14 @@ end
 local ghostty_retransmit_timer = nil
 M._ghostty_settle_ms = 100
 
-local function ghostty_retransmit_pass()
-  local caps = M._detect_fn()
-  for _, handle in ipairs(M._handles) do
-    local placement = compute_placement(handle)
-    if placement and ghostty_entry_stale(handle, caps.terminal) then
-      retransmit_and_place(handle, placement)
-    end
-  end
-end
+-- Forward-declared: arm_ghostty_retransmit_timer's timer callback needs
+-- ghostty_retransmit_pass to already exist, but ghostty_retransmit_pass's
+-- own bounded-retry branch (see its comment below) needs to call back into
+-- arm_ghostty_retransmit_timer — the same forward-declaration cycle
+-- schedule_redraw/redraw_all below resolves the same way.
+local ghostty_retransmit_pass
 
-local function schedule_ghostty_retransmit()
+local function arm_ghostty_retransmit_timer()
   if not ghostty_retransmit_timer then
     ghostty_retransmit_timer = vim.uv.new_timer()
   end
@@ -699,6 +696,48 @@ local function schedule_ghostty_retransmit()
     0,
     vim.schedule_wrap(ghostty_retransmit_pass)
   )
+end
+
+-- A handle can still be `ghostty_entry_stale()` after this pass runs:
+-- `retransmit_and_place()` itself can fail (e.g. `write_all()` exhausted its
+-- bounded EAGAIN retries), or `compute_placement()` can come back `nil` for
+-- this one settle-timer tick even though the handle's cache entry is still
+-- stale — a real drag-resize's tail end can still race `vim.fn.screenpos()`
+-- (see its pcall guard in `compute_placement`) at the exact moment the
+-- settle timer fires. Nothing else ever revisits a stale handle once its
+-- cache entry says stale and no further `WinResized`/`WinScrolled` happens
+-- to arrive, so without a retry here the placement stays blank until the
+-- user happens to resize again (issue #37) — purely a matter of luck, not a
+-- permanent loss. This mirrors `DESTROY_DELETE_RETRIES` above (issue #27):
+-- same shape of problem, an escape-sequence-driven recovery with no
+-- response to confirm success by (`q=2` suppresses all of them), so a
+-- bounded self-reschedule is the only way back that doesn't depend on an
+-- unrelated future event. Bounded, not indefinite, so a handle that's
+-- genuinely gone (e.g. its window closed) can't keep the timer alive
+-- forever, preserving AGENTS.md's "fully quiescent idle" rule.
+local GHOSTTY_RETRANSMIT_RETRIES = 3
+local ghostty_retransmit_retries_left = GHOSTTY_RETRANSMIT_RETRIES
+
+ghostty_retransmit_pass = function()
+  local caps = M._detect_fn()
+  local still_stale = false
+  for _, handle in ipairs(M._handles) do
+    if ghostty_entry_stale(handle, caps.terminal) then
+      local placement = compute_placement(handle)
+      if not (placement and retransmit_and_place(handle, placement)) then
+        still_stale = true
+      end
+    end
+  end
+  if still_stale and ghostty_retransmit_retries_left > 0 then
+    ghostty_retransmit_retries_left = ghostty_retransmit_retries_left - 1
+    arm_ghostty_retransmit_timer()
+  end
+end
+
+local function schedule_ghostty_retransmit()
+  ghostty_retransmit_retries_left = GHOSTTY_RETRANSMIT_RETRIES
+  arm_ghostty_retransmit_timer()
 end
 
 -- Redraw (debounced, never transmits except Ghostty's resize self-heal) ------
