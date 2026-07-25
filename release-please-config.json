@@ -6,8 +6,7 @@
     ".": {
       "release-type": "simple",
       "package-name": "blit.nvim",
-      "changelog-path": "CHANGELOG.md",
-      "release-as": "0.1.0"
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }
