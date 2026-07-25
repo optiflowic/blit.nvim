@@ -92,12 +92,30 @@ clip-amount math (`compute_clip`) and the pixel-space conversion
   dimensions (read once via `lua/blit/png.lua`'s IHDR reader — metadata only,
   never a full PNG decode; this doesn't touch the PNG-only/zero-dependency
   constraints since no pixel data is ever read by blit itself).
-- All four keys are emitted together only when at least one axis is
-  clipped; an unclipped placement omits them entirely (zero escape-sequence
-  byte cost in the common case). `x=0`/`y=0` are legitimate, explicitly-sent
+- Keys are emitted in clipped **axis pairs**, independently per axis: `x=`
+  and `w=` together only when the column axis is clipped, `y=` and `h=`
+  together only when the row axis is clipped. A single-axis clip (e.g. only
+  rows clipped) omits the other axis's pair entirely rather than sending all
+  four — an unclipped placement omits all four (zero escape-sequence byte
+  cost in the common case). `x=0`/`y=0` are legitimate, explicitly-sent
   values (e.g. only the far edge of a placement is clipped) — blit checks
-  `~= nil`, not truthiness-as-"present", so a genuine `0` offset is never
+  for a non-nil value (`if opts.crop_x then` — Lua's `0` is truthy, so this
+  correctly still emits `x=0`), not `> 0`, so a genuine `0` offset is never
   dropped.
+- **Assumed, pending manual verification** (see `docs/manual-testing.md`):
+  omitting one axis's pair (`x=`/`w=` or `y=`/`h=`) while sending the
+  other's is expected to make the terminal default the omitted axis to the
+  full, unclipped image span (offset `0`, size = native width/height) —
+  i.e. kitty/WezTerm/Ghostty fill in the missing `x`/`w` (or `y`/`h`) as if
+  the whole image were requested on that axis, rather than leaving it at a
+  stale or zero size. Unverified on a real terminal as of this writing (only
+  exercised in headless Neovim, which never talks to a real terminal). If a
+  real terminal instead defaults an omitted axis to something other than
+  the full image span, the fix is to always emit all four keys explicitly
+  once any axis is clipped (defaulting the unclipped axis's `x`/`y` to `0`
+  and `w`/`h` to `native_width`/`native_height`) — a small, contained change
+  to `compute_placement`/`placement_opts` in `lua/blit/renderer.lua`, not a
+  redesign.
 - `c=`/`r=` shrink to the visible cell span (not the placement's original
   full `width`/`height`) whenever the corresponding axis is cropped, so the
   cropped slice renders at the correct on-screen size instead of being

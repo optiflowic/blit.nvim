@@ -36,6 +36,13 @@ WezTerm (and Ghostty when available) before tagging a release.
       blank gap or garbled/stretched pixels appear instead of a clean crop —
       on WezTerm specifically, apply the scroll-once-more recovery pattern
       from the WezTerm section below before failing this check.
+- [ ] While cropped at only the top or bottom edge (rows clipped, columns
+      not), confirm the full width of the image still renders — no sliver
+      or blank space on the left/right side. This verifies the assumption
+      noted in `docs/spec/kitty-graphics.md`'s "Source-rectangle cropping"
+      section that the terminal defaults an omitted axis's `x=`/`w=` (or
+      `y=`/`h=`) to the full image span rather than a stale/zero size. If
+      the un-clipped axis renders wrong, see that section's fallback.
 - [ ] After the image has been shown cropped (per the check above), scroll
       it back to fully within the window. Confirm it renders as the
       complete, uncropped image, not stuck showing the previous crop
