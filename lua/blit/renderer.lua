@@ -708,13 +708,18 @@ end
 -- cache entry says stale and no further `WinResized`/`WinScrolled` happens
 -- to arrive, so without a retry here the placement stays blank until the
 -- user happens to resize again (issue #37) — purely a matter of luck, not a
--- permanent loss. This mirrors `DESTROY_DELETE_RETRIES` above (issue #27):
--- same shape of problem, an escape-sequence-driven recovery with no
+-- permanent loss. This mirrors `DESTROY_DELETE_RETRIES` above (issue #27) in
+-- spirit: same shape of problem, an escape-sequence-driven recovery with no
 -- response to confirm success by (`q=2` suppresses all of them), so a
 -- bounded self-reschedule is the only way back that doesn't depend on an
--- unrelated future event. Bounded, not indefinite, so a handle that's
--- genuinely gone (e.g. its window closed) can't keep the timer alive
--- forever, preserving AGENTS.md's "fully quiescent idle" rule.
+-- unrelated future event. Unlike `pending_deletes`' per-entry budget, this
+-- one budget is shared across every handle a settle-timer pass retries —
+-- each pass already retries all currently-stale handles together (mirroring
+-- `redraw_all`'s own batched-per-pass shape), so every stale handle still
+-- gets up to `GHOSTTY_RETRANSMIT_RETRIES` + 1 total attempts regardless of
+-- how many other handles are stale alongside it. Bounded, not indefinite,
+-- so a handle that's genuinely gone (e.g. its window closed) can't keep the
+-- timer alive forever, preserving AGENTS.md's "fully quiescent idle" rule.
 local GHOSTTY_RETRANSMIT_RETRIES = 3
 local ghostty_retransmit_retries_left = GHOSTTY_RETRANSMIT_RETRIES
 
