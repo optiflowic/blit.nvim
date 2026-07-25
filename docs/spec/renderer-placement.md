@@ -186,6 +186,21 @@ edge. If `topline` doesn't match exactly or `topfill` is `0`, the block has
 genuinely scrolled fully past and the handle is correctly hidden, same as
 before.
 
+`topfill` is a per-window count, not a per-extmark one — if a second
+handle's `virt_lines` block were anchored at this handle's own `lnum` (two
+handles on the same buffer line), `topfill` would reflect their combined
+row counts and could not be attributed to either handle alone.
+`compute_placement` guards against this specific case
+(`has_sibling_at_same_lnum`): if any other handle shares this handle's
+`buf`/`lnum`, the fallback branch treats the handle as hidden rather than
+risk a wrong crop. **Known limitation, not guarded against**: `topfill` is
+also populated by Neovim's own diff-mode filler lines, which use the exact
+same mechanism but aren't a blit handle at all — in diff mode, a filler
+line landing at exactly `topline == handle.geometry.lnum + 1` could still
+be misread as this handle's own reserved rows. Narrow (requires diff mode
+active on a buffer with a cropped image at that precise scroll position)
+and not currently detected or tested.
+
 **Known limitation, much narrower than before: only the normal debounce
 latency remains.** A scroll burst faster than `config.debounce_ms` (default
 16ms) can still show one stale frame before the crop catches up to the

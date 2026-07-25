@@ -788,6 +788,49 @@ T["redraw"]["source-rect crop"]["hides once the reserved block has fully scrolle
   MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
 end
 
+T["redraw"]["source-rect crop"]["two handles anchored at the same lnum hide instead of risking a wrong crop"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  vim.wo[win].scrolloff = 0
+  local handle_a = renderer.show(
+    tmp_path,
+    { width = 5, height = 5, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  local handle_b = renderer.show(
+    tmp_path,
+    { width = 5, height = 5, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle_a.visible, true)
+  MiniTest.expect.equality(handle_b.visible, true)
+
+  -- Scroll gradually until the window's topline has landed exactly on the
+  -- line after the shared anchor, with reserved rows from both handles'
+  -- virt_lines still partly showing (winsaveview().topfill > 0) — the exact
+  -- scenario where topfill can no longer be attributed to a single handle.
+  local ctrl_e = vim.api.nvim_replace_termcodes("<C-e>", true, true, true)
+  local view
+  for _ = 1, 20 do
+    vim.api.nvim_win_call(win, function()
+      vim.cmd("normal! " .. ctrl_e)
+    end)
+    vim.cmd("redraw")
+    view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+    if view.topline == 2 and view.topfill > 0 then
+      break
+    end
+  end
+  MiniTest.expect.equality(view.topline, 2)
+  MiniTest.expect.equality(view.topfill > 0, true)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured >= 2
+  end)
+
+  MiniTest.expect.equality(handle_a.visible, false)
+  MiniTest.expect.equality(handle_b.visible, false)
+end
+
 ---@return boolean
 local function any_captured_has(needle)
   for _, seq in ipairs(captured) do

@@ -353,6 +353,26 @@ end
 ---@field crop_w? integer present only when column-clipped from either side
 ---@field crop_h? integer present only when row-clipped from either side
 
+-- `winsaveview().topfill` (used in compute_placement's scrolled-off-anchor
+-- fallback below) counts filler/virtual lines above topline for the whole
+-- window, not per-extmark — if another handle's virt_lines block is also
+-- anchored at this handle's own lnum, topfill would reflect their combined
+-- row counts and the fallback's crop math could not be trusted.
+---@param handle blit.Handle
+---@return boolean
+local function has_sibling_at_same_lnum(handle)
+  for _, other in ipairs(M._handles) do
+    if
+      other ~= handle
+      and other.buf == handle.buf
+      and other.geometry.lnum == handle.geometry.lnum
+    then
+      return true
+    end
+  end
+  return false
+end
+
 ---@param handle blit.Handle
 ---@return blit.PlacementResult?
 local function compute_placement(handle)
@@ -407,6 +427,9 @@ local function compute_placement(handle)
     -- already scrolled fully past.
     local view = vim.api.nvim_win_call(handle.win, vim.fn.winsaveview)
     if view.topline ~= handle.geometry.lnum + 1 or view.topfill <= 0 then
+      return nil
+    end
+    if has_sibling_at_same_lnum(handle) then
       return nil
     end
     -- The line right after the anchor is guaranteed visible here (topfill
