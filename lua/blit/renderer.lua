@@ -977,6 +977,12 @@ local function is_positive_integer_or_nil(v)
   return v == nil or is_positive_integer(v)
 end
 
+---@param v any
+---@return boolean
+local function is_positive_number_or_nil(v)
+  return v == nil or (type(v) == "number" and v > 0)
+end
+
 -- Fills in whichever of width/height the caller omitted, preserving the
 -- PNG's native aspect ratio under an assumed terminal cell aspect ratio
 -- (docs/spec/renderer-placement.md's "Reserving space: virt_lines" —
@@ -1064,7 +1070,11 @@ function M.show(path, opts)
     z_index = { opts.z_index, "number", true },
     max_file_bytes = { opts.max_file_bytes, "number", true },
     debounce_ms = { opts.debounce_ms, "number", true },
-    cell_aspect_ratio = { opts.cell_aspect_ratio, "number", true },
+    cell_aspect_ratio = {
+      opts.cell_aspect_ratio,
+      is_positive_number_or_nil,
+      "a positive number, or nil",
+    },
   })
 
   local caps = M._detect_fn()
