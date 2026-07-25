@@ -28,15 +28,28 @@ WezTerm (and Ghostty when available) before tagging a release.
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
 - [ ] Scrolling so the image is cut off at the top or bottom of the window
-      hides it entirely (no partial image bleeding past the window edge) —
-      this is the deliberate v0.x "fully visible or not shown" policy. A
-      brief **blank gap** (reserved space, no image and no garbled pixels)
-      during the scroll transition itself is expected — see
-      `docs/spec/renderer-placement.md`'s "Known limitation" note. Fail
-      this check only if the gap persists after scrolling settles, or if
-      any actual image pixels appear outside the fully-visible case — on
-      WezTerm specifically, apply the scroll-once-more recovery pattern
+      shows a **cropped** slice of the image (the still-visible portion,
+      correctly sized to the remaining cell span) instead of a blank gap or
+      the image disappearing entirely — see `docs/spec/renderer-placement.md`'s
+      "Visibility policy" section. Only scrolling it fully out of view (no
+      overlap with the window at all) should hide it. Fail this check if a
+      blank gap or garbled/stretched pixels appear instead of a clean crop —
+      on WezTerm specifically, apply the scroll-once-more recovery pattern
       from the WezTerm section below before failing this check.
+- [ ] While cropped at only the top or bottom edge (rows clipped, columns
+      not), confirm the full width of the image still renders — no sliver
+      or blank space on the left/right side. This verifies the assumption
+      noted in `docs/spec/kitty-graphics.md`'s "Source-rectangle cropping"
+      section that the terminal defaults an omitted axis's `x=`/`w=` (or
+      `y=`/`h=`) to the full image span rather than a stale/zero size. If
+      the un-clipped axis renders wrong, see that section's fallback.
+- [ ] After the image has been shown cropped (per the check above), scroll
+      it back to fully within the window. Confirm it renders as the
+      complete, uncropped image, not stuck showing the previous crop
+      rectangle — this verifies the assumption noted in
+      `docs/spec/kitty-graphics.md`'s "Source-rectangle cropping" section
+      that re-placing with no crop keys resets to the full image. If it
+      stays stuck cropped, see that section's fallback.
 - [ ] Resizing the window (`WinResized`) repositions/hides the image
       correctly, with a single redraw per resize (not one per intermediate
       frame).
@@ -53,25 +66,30 @@ WezTerm (and Ghostty when available) before tagging a release.
 - [ ] Anchor an image whose `virt_lines` block fits entirely within the
       window, then scroll so the window's *bottom* edge lands partway
       through the reserved rows (not far enough to scroll the image fully
-      out of view) and let scrolling settle for a few seconds. No clipped
-      image pixels should remain visible past the window's bottom edge —
-      distinct from the expected transient blank-gap flash noted above,
-      this is a persistent bleed of actual pixel data (issue #23). If
-      pixels do stay stuck, scroll by one more line in either direction
-      and confirm they clear within one more debounce interval — blit
-      resends the hide command on every redraw pass a placement is
-      invisible specifically so a later scroll gets another chance to
-      clear a stuck placement (`docs/spec/renderer-placement.md`'s
-      Lifecycle section); pixels stuck past that point are a regression.
+      out of view) and let scrolling settle for a few seconds. The image
+      should show a clean crop up to the window's bottom edge — no pixels
+      bleeding past the edge, and no stale/incorrect crop amount lingering
+      once scrolling settles (WezTerm's scroll-driven repaint lag, issue
+      #23, previously showed this as stuck pixels past a hide command; with
+      cropping there is no hide at this edge, so watch specifically for a
+      crop boundary that doesn't track the window edge). If it looks wrong
+      immediately after scrolling, scroll by one more line in either
+      direction and confirm it corrects within one more debounce interval —
+      blit resends the placement on every redraw pass a handle is visible
+      specifically so a later scroll gets another chance to fix a stuck
+      frame (`docs/spec/renderer-placement.md`'s Lifecycle section); still
+      wrong past that point is a regression.
 - [ ] Repeat the same check at the window's *top* edge: anchor an image
-      near the top of the buffer, scroll down so its `virt_lines` block
-      straddles the window's top edge (not far enough to scroll it fully
-      out of view), and let scrolling settle for a few seconds. This is
-      the same WezTerm scroll-driven repaint lag as the bottom-edge case
-      above, just at the opposite edge (issue #28) — the same recovery
-      pattern applies: if a clipped sliver stays stuck, scroll by one more
-      line in either direction and confirm it clears within one more
-      debounce interval; pixels stuck past that point are a regression.
+      near the top of the buffer, scroll down (gradually, e.g. holding
+      `<C-e>`) so its `virt_lines` block straddles the window's top edge
+      (not far enough to scroll it fully out of view), and let scrolling
+      settle for a few seconds. This is the same WezTerm scroll-driven
+      repaint lag as the bottom-edge case above, just at the opposite edge
+      (issue #28) — again, a clean crop tracking the window's top edge is
+      expected (this is the exact scenario Issue #6 fixed: previously a
+      blank gap, now a cropped image), not a blank gap or stuck stale crop.
+      Same recovery pattern applies if it looks wrong immediately after
+      scrolling.
 - [ ] `show()` an image, then `clear()` (or `clear_all()`) it, *without*
       scrolling or otherwise triggering a redraw afterward. No stuck image
       pixels should remain visible at that location, even immediately after

@@ -106,6 +106,25 @@ T["build_transmit"]["combined transmit+placement carries the fixed placement id"
   MiniTest.expect.equality(sequences, { expected })
 end
 
+T["build_transmit"]["combined transmit+placement carries crop keys before c=/r="] = function()
+  local png_bytes = "hi"
+  local sequences = terminal.build_transmit(png_bytes, {
+    id = ID,
+    placement = { crop_x = 1, crop_y = 2, crop_w = 3, crop_h = 4, columns = 10, rows = 5 },
+  })
+  local payload = vim.base64.encode(png_bytes)
+  local expected = ESC
+    .. "_Ga=T,f=100,t=d,i="
+    .. ID
+    .. ",q=2,p="
+    .. terminal.PLACEMENT_ID
+    .. ",x=1,y=2,w=3,h=4,c=10,r=5,m=0;"
+    .. payload
+    .. ESC
+    .. "\\"
+  MiniTest.expect.equality(sequences, { expected })
+end
+
 T["build_transmit"]["deterministic across repeated calls"] = function()
   local png_bytes = "some bytes"
   local opts = { id = ID, placement = { columns = 10, rows = 5 } }
@@ -131,6 +150,38 @@ T["build_placement"]["with options in canonical order"] = function()
     seq,
     ESC .. "_Ga=p,i=" .. ID .. ",p=" .. terminal.PLACEMENT_ID .. ",c=10,r=5,z=3,C=1" .. ESC .. "\\"
   )
+end
+
+T["build_placement"]["source-rect crop keys precede target cell box, in fixed order"] = function()
+  local seq = terminal.build_placement(
+    ID,
+    { crop_x = 5, crop_y = 10, crop_w = 20, crop_h = 30, columns = 4, rows = 6 }
+  )
+  MiniTest.expect.equality(
+    seq,
+    ESC
+      .. "_Ga=p,i="
+      .. ID
+      .. ",p="
+      .. terminal.PLACEMENT_ID
+      .. ",x=5,y=10,w=20,h=30,c=4,r=6"
+      .. ESC
+      .. "\\"
+  )
+end
+
+T["build_placement"]["crop_x/crop_y of 0 are emitted, not treated as absent"] = function()
+  local seq = terminal.build_placement(ID, { crop_x = 0, crop_y = 0, crop_w = 5, crop_h = 5 })
+  MiniTest.expect.equality(seq:find(",x=0,", 1, true) ~= nil, true)
+  MiniTest.expect.equality(seq:find(",y=0,", 1, true) ~= nil, true)
+end
+
+T["build_placement"]["no crop keys when omitted, unchanged from existing placement bytes"] = function()
+  local seq = terminal.build_placement(ID, { columns = 10, rows = 5 })
+  MiniTest.expect.equality(seq:find(",x=", 1, true), nil)
+  MiniTest.expect.equality(seq:find(",y=", 1, true), nil)
+  MiniTest.expect.equality(seq:find(",w=", 1, true), nil)
+  MiniTest.expect.equality(seq:find(",h=", 1, true), nil)
 end
 
 T["build_placement"]["always uses the same fixed placement id across calls"] = function()

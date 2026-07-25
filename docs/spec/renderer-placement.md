@@ -17,14 +17,17 @@ never constructs escape sequences itself.
 buffer line itself is left untouched (e.g. a markdown `![alt](path)` line
 stays intact); the image renders into the reserved blank lines immediately
 below it. `opts.width`/`opts.height` are cell counts (columns/rows) the
-caller must supply explicitly — v0.x does not read the PNG's pixel
-dimensions or attempt aspect-ratio-preserving auto-sizing, since kitty
-placements are given explicit `c=`/`r=` cell targets and blit does not query
-the terminal's cell-pixel size (that would require reading an async
+caller must supply explicitly and remain mandatory — blit reads the PNG's
+*native pixel* dimensions (`lua/blit/png.lua`'s IHDR reader) solely to
+support cropping a partially-visible placement (see "Visibility policy"
+below), not for aspect-ratio-preserving auto-sizing: blit still does not
+query the terminal's cell-pixel size (that would require reading an async
 protocol response, out of scope per `docs/spec/kitty-graphics.md`'s
-"Response handling" section). One handle = one entry in `M._handles`,
-shaped `{ id, buf, win, extmark_id, path, cache_key, geometry, z_index,
-visible }`, matching `AGENTS.md`'s "one image = one handle table" rule.
+"Response handling" section), so there is no way to convert a native pixel
+size into a cell count on blit's own. One handle = one entry in
+`M._handles`, shaped `{ id, buf, win, extmark_id, path, cache_key, geometry,
+z_index, visible, native_width, native_height }`, matching `AGENTS.md`'s
+"one image = one handle table" rule.
 
 **Known limitation**: a handle is bound to exactly one `win` at creation
 time, but the `virt_lines` extmark carrying its reserved blank rows is
@@ -110,48 +113,108 @@ repositions/hides via `a=p`/`a=d`, so re-including the handle `show()` just
 created in that same debounced pass is safe — the worst case is one
 redundant, idempotent `a=p` for it.
 
-## Visibility policy: fully visible or not shown at all
+## Visibility policy: partial visibility via source-rectangle cropping
 
-When an image's reserved row/col span is not **entirely** contained within
-its window's current bounds, blit does not display it — no partial/cropped
-placement. This was a deliberate scope decision (see project history): kitty
-supports source-rectangle cropping (`x`,`y`,`w`,`h` on an existing
-transmission) which could show a partial image when scrolled halfway into
-view, but implementing it correctly requires proportional pixel-crop math
-against the PNG's native dimensions and extending
-`docs/spec/kitty-graphics.md` with those keys. Deferred until a future
-version if the all-or-nothing behavior proves insufficient in practice.
+An image is hidden entirely only when its reserved row/col span has **no
+overlap at all** with its window's current bounds on either axis. When part
+of the span is still within bounds, blit shows the visible slice as a
+cropped placement (kitty's placement source rectangle, `x`,`y`,`w`,`h` — see
+`docs/spec/kitty-graphics.md`'s "Source-rectangle cropping") rather than
+hiding the whole thing. This replaced the original v0.1 all-or-nothing
+policy, which caused the scroll-transition blank-gap limitation described
+below.
 
-The pure check (`fully_within(anchor, span, bound_start, bound_end)` in
-`renderer.lua`, unit-tested directly) is: `anchor >= bound_start and anchor +
-span - 1 <= bound_end`, applied independently to rows and columns; both must
-hold.
+The clip-amount computation (`compute_clip(anchor, span, bound_start,
+bound_end)` in `renderer.lua`, unit-tested directly) returns three values:
+`clip_low` (cells clipped from the top/left end), `clip_high` (cells clipped
+from the bottom/right end), and `visible_span` (`0` if there's no overlap at
+all). Applied independently to rows and columns; the placement is hidden if
+either axis's `visible_span` is `0`. `fully_within(anchor, span, bound_start,
+bound_end)` (the original check) is kept as a thin wrapper — `clip_low == 0
+and clip_high == 0 and visible_span == span` — so it still answers "is this
+completely unclipped", used where only a yes/no answer is needed.
 
-**Known limitation: a blank gap can flash during the scroll transition.**
-`compute_placement` treats the anchor line as invisible once
-`vim.fn.screenpos(win, lnum, 1)` returns `row = 0` (scrolled off), and
-correctly stops placing/hides the image at that point (verified: the
-`a=d`/`a=p` sequences blit sends are always correct — this is not a
-protocol-layer bug). But Neovim's own `virt_lines` rendering does not
-follow the same all-or-nothing rule: it treats a buffer line plus its
-attached `virt_lines` as one scrollable block, so the window's topline can
-land *inside* that block — showing the tail of the reserved blank rows on
-screen even though the owning line's own `screenpos` already reports
-fully off-screen. Since blit has (correctly, per the policy above) not
-placed an image there, this reads as an empty gap at the top of the
-window during the scroll transition, not a garbled/partial image. This is
-the same root cause reported against `3rd/image.nvim` (see their issue
-#213): there is no viewport API to ask "how many virtual rows above
-topline are currently showing" without tracking scroll events yourself,
-and even with that number in hand, closing the gap correctly requires
-showing a genuinely cropped slice of the image (kitty's placement source
-rectangle, `x`,`y`,`w`,`h` in pixels) — not just hiding or resizing
-`virt_lines`, which does not make the missing pixels reappear and risks
-its own topline/scroll feedback instability from resizing a line's height
-while it's mid-scroll. Source-rectangle cropping is a real feature (PNG
-pixel-dimension reading, new protocol keys, replacing the boolean
-`fully_within` check with crop-amount math) and is intentionally deferred,
-not implemented as part of the visibility policy above.
+`pixel_crop(clip_low_cells, clip_high_cells, total_cells, native_px)`
+converts a cell-based clip amount into the proportional pixel offset/size
+against the image's *native* pixel dimensions (from `lua/blit/png.lua`'s
+IHDR reader — metadata only, never a full PNG decode, so this doesn't touch
+the PNG-only/zero-dependency constraints): `offset_px = floor(clip_low_cells
+* native_px / total_cells)`, `size_px = native_px - offset_px -
+floor(clip_high_cells * native_px / total_cells)`. This is guaranteed to
+never produce a non-positive `size_px` when `visible_span > 0`: since
+`clip_low_cells + clip_high_cells < total_cells` (strictly, by definition of
+a positive `visible_span`), `floor(a) + floor(b) <= floor(a+b)` bounds the
+two subtracted terms' sum strictly below `native_px`, leaving at least `1`.
+`x`/`y`/`w`/`h` are only emitted (via `terminal.lua`'s `PlacementOpts`) when
+at least one axis is actually clipped — an unclipped placement pays no extra
+escape-sequence bytes, matching the existing conditional-emission pattern
+for `z=`/`C=1`. The target `c=`/`r=` also shrink to the visible cell span
+when clipped, so the cropped slice renders at the correct size instead of
+being stretched to fill the placement's original box.
+
+**Resolved: the scroll-transition blank gap (was: "a blank gap can flash
+during the scroll transition").** `compute_placement` used to treat the
+anchor line as invisible the moment `vim.fn.screenpos(win, lnum, 1)`
+returned `row = 0` (scrolled off) — correct as far as it went (the `a=d`
+sequence sent at that point was always right), but Neovim's own `virt_lines`
+rendering does not follow the same all-or-nothing rule: it treats a buffer
+line plus its attached `virt_lines` as one scrollable block, so the window's
+topline can land *inside* that block, showing the tail of the reserved rows
+on screen even though the owning line's own `screenpos` already reports
+fully off-screen. This is the same root cause reported against
+`3rd/image.nvim` (issue #213).
+
+The fix required a genuinely different signal than `screenpos`, since
+`screenpos` on an off-screen line can never report *how far* off-screen it
+is. Confirmed empirically (headless `nvim`, a `virt_lines`-bearing extmark,
+gradual `<C-e>` scrolling): `vim.fn.winsaveview().topfill` counts down from
+the reserved row count to `0` as the window scrolls through a handle's
+`virt_lines` block, populated whenever the window's `topline` has landed
+exactly on the line right after the anchor (the same mechanism diff-mode
+filler lines use, just also populated here). `compute_placement` now
+branches on this: when `screenpos(win, lnum, 1).row > 0`, row-clipping uses
+the normal `compute_clip` path against the window's bounds as described
+above. When it's `0`, a fallback checks `winsaveview().topline ==
+handle.geometry.lnum + 1 and winsaveview().topfill > 0`; if true,
+`clip_low = geometry.rows - topfill`, the visible tail starts at the
+window's own top edge (`bounds.top`), and the remaining bottom-clip/pixel-
+crop math is identical to the normal path. The column for this branch comes
+from `screenpos(win, view.topline, 1)` (the line right after the anchor,
+guaranteed visible whenever this branch is reached) rather than the
+anchor's own — both render `virt_lines` at the same window text-area left
+edge. If `topline` doesn't match exactly or `topfill` is `0`, the block has
+genuinely scrolled fully past and the handle is correctly hidden, same as
+before.
+
+`topfill` is a per-window count, not a per-extmark one — if a second
+handle's `virt_lines` block were anchored at this handle's own `lnum` (two
+handles on the same buffer line), `topfill` would reflect their combined
+row counts and could not be attributed to either handle alone.
+`compute_placement` guards against this specific case
+(`has_sibling_at_same_lnum`): if any other handle shares this handle's
+`buf`/`lnum`, the fallback branch treats the handle as hidden rather than
+risk a wrong crop. **Known limitation, not guarded against**: `topfill` is
+also populated by Neovim's own diff-mode filler lines, which use the exact
+same mechanism but aren't a blit handle at all — in diff mode, a filler
+line landing at exactly `topline == handle.geometry.lnum + 1` could still
+be misread as this handle's own reserved rows. Narrow (requires diff mode
+active on a buffer with a cropped image at that precise scroll position)
+and not currently detected or tested.
+
+**Known limitation, much narrower than before: only the normal debounce
+latency remains.** A scroll burst faster than `config.debounce_ms` (default
+16ms) can still show one stale frame before the crop catches up to the
+latest scroll position — the same general debounce-latency characteristic
+already true of every other `WinScrolled` response in the plugin, not a new
+caveat specific to cropping.
+
+**Assumed, pending manual verification**: re-issuing `a=p` with no crop keys
+at all (a previously-cropped placement now fully back in view) is expected
+to reset the placement to the complete, uncropped image rather than
+retaining a stale crop rectangle — see `docs/spec/kitty-graphics.md`'s
+"Source-rectangle cropping" section and `docs/manual-testing.md` for the
+verification step and fallback if this assumption is wrong on some
+terminal.
 
 **Known limitation: a stuck `a=d` can leave clipped pixels on WezTerm past
 the window edge.** Distinct from the blank-gap flash above, this is a
@@ -193,8 +256,15 @@ needed there.
 
 Cache key: `path .. ":" .. mtime.sec .. "." .. mtime.nsec` (from
 `vim.uv.fs_stat`). Each cache entry is a **list** of `{ id, active, lines,
-columns }` entries for that exact file content — a list, not a single
-entry, because:
+columns, native_width, native_height }` entries for that exact file content
+— a list, not a single entry, because:
+
+`native_width`/`native_height` (the PNG's native pixel dimensions, read once
+via `lua/blit/png.lua`'s IHDR reader when the file is actually read for
+transmission) are populated at `register_cache_entry` time and copied onto
+every handle that reuses the entry — a cache hit never re-reads or
+re-parses the file. These are used solely by `pixel_crop` (see "Visibility
+policy" above), never for auto-sizing.
 
 - `show()` on a cache hit with an **idle** (`active = false`) entry reuses
   that id: no re-transmission, just an `a=p` placement (or nothing yet, if
@@ -323,9 +393,12 @@ Two distinct kinds of state transition, kept separate:
 - **Redraw** (`WinScrolled`, `WinResized`, `TabEnter`, `TabLeave`, debounced
   by `config.debounce_ms` — single deferred recompute per burst, per
   AGENTS.md's performance rule):
-  recomputes visibility/position for every still-anchored handle and
-  toggles its placement (`a=p` to show/reposition, `a=d` to hide). Never
-  destroys a handle, and never transmits itself — the narrow Ghostty resize
+  recomputes visibility/position/crop for every still-anchored handle
+  (`compute_placement` returns a single `blit.PlacementResult` struct
+  carrying the target screen row/col, the — possibly clipped — target cell
+  size, and any crop keys, or `nil` if nothing is visible) and toggles its
+  placement (`a=p` to show/reposition, `a=d` to hide). Never destroys a
+  handle, and never transmits itself — the narrow Ghostty resize
   self-heal described in "Transmission cache" above only ever gets
   (re)armed here (`ghostty_entry_stale()` gates it to a confirmed Ghostty
   resize) and actually retransmits later, on its own separately-debounced

@@ -10,6 +10,7 @@
 
 local terminal = require("blit.terminal")
 local config = require("blit.config")
+local png = require("blit.png")
 
 local M = {}
 
@@ -34,6 +35,8 @@ local NAMESPACE = "blit"
 ---@field geometry blit.Geometry
 ---@field z_index? integer
 ---@field visible boolean
+---@field native_width integer PNG native pixel width, from png.read_ihdr; used only for crop math, never for auto-sizing
+---@field native_height integer PNG native pixel height, from png.read_ihdr
 
 M._handles = {}
 
@@ -93,7 +96,7 @@ end
 
 -- Transmission cache ----------------------------------------------------------
 
----@type table<string, { id: integer, active: boolean, lines: integer, columns: integer }[]>
+---@type table<string, { id: integer, active: boolean, lines: integer, columns: integer, native_width: integer, native_height: integer }[]>
 local cache = {}
 
 ---@param path string
@@ -167,7 +170,7 @@ end
 
 ---@param key string
 ---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
----@return { id: integer, active: boolean, lines: integer, columns: integer }?
+---@return { id: integer, active: boolean, lines: integer, columns: integer, native_width: integer, native_height: integer }?
 local function acquire_idle_entry(key, terminal_name)
   local entries = cache[key]
   if not entries then
@@ -199,14 +202,23 @@ end
 
 ---@param key string
 ---@param id integer
-local function register_cache_entry(key, id)
+---@param native_width integer
+---@param native_height integer
+local function register_cache_entry(key, id, native_width, native_height)
   cache[key] = cache[key] or {}
-  table.insert(cache[key], { id = id, active = true, lines = vim.o.lines, columns = vim.o.columns })
+  table.insert(cache[key], {
+    id = id,
+    active = true,
+    lines = vim.o.lines,
+    columns = vim.o.columns,
+    native_width = native_width,
+    native_height = native_height,
+  })
 end
 
 ---@param key string
 ---@param id integer
----@return { id: integer, active: boolean, lines: integer, columns: integer }?
+---@return { id: integer, active: boolean, lines: integer, columns: integer, native_width: integer, native_height: integer }?
 local function find_cache_entry(key, id)
   local entries = cache[key]
   if not entries then
@@ -251,9 +263,37 @@ local function drop_cache_entry(key, id)
 end
 
 -- Geometry ----------------------------------------------------------------
--- Pure integer math, unit-tested directly. v0.x policy: an image is either
--- fully visible or not shown at all — no partial/cropped placements. See
--- docs/spec/renderer-placement.md's "Visibility policy".
+-- Pure integer math, unit-tested directly. A placement is hidden only when
+-- it has no overlap at all with its window's bounds; a partial overlap
+-- shows a cropped slice instead. See docs/spec/renderer-placement.md's
+-- "Visibility policy".
+
+-- compute_clip is the single source of truth for how much of a row/col span
+-- falls outside a window's bounds on each end; fully_within is kept as a
+-- thin wrapper (rather than removed) so every existing all-or-nothing test
+-- keeps passing unchanged. See docs/spec/renderer-placement.md's Visibility
+-- policy section.
+---@param anchor integer
+---@param span integer
+---@param bound_start integer
+---@param bound_end integer
+---@return integer clip_low cells clipped from the low (top/left) end
+---@return integer clip_high cells clipped from the high (bottom/right) end
+---@return integer visible_span 0 if nothing overlaps the bounds at all
+local function compute_clip(anchor, span, bound_start, bound_end)
+  if anchor <= 0 then
+    return 0, 0, 0
+  end
+  local span_end = anchor + span - 1
+  local clip_low = math.max(0, bound_start - anchor)
+  local clip_high = math.max(0, span_end - bound_end)
+  local visible_span = span - clip_low - clip_high
+  if visible_span <= 0 then
+    return clip_low, clip_high, 0
+  end
+  return clip_low, clip_high, visible_span
+end
+M.compute_clip = compute_clip
 
 ---@param anchor integer
 ---@param span integer
@@ -261,12 +301,33 @@ end
 ---@param bound_end integer
 ---@return boolean
 local function fully_within(anchor, span, bound_start, bound_end)
-  if anchor <= 0 then
-    return false
-  end
-  return anchor >= bound_start and (anchor + span - 1) <= bound_end
+  local clip_low, clip_high, visible_span = compute_clip(anchor, span, bound_start, bound_end)
+  return clip_low == 0 and clip_high == 0 and visible_span == span
 end
 M.fully_within = fully_within
+
+-- Converts a cell-based clip amount into a proportional pixel offset/size
+-- against the image's native pixel dimensions, for kitty's placement
+-- source-rectangle keys (x/y or w/h — see docs/spec/kitty-graphics.md's
+-- "Source-rectangle cropping" section). Proof size_px >= 1 whenever
+-- visible_span > 0: clip_low + clip_high < total_cells (strict, since
+-- visible_span = total_cells - clip_low - clip_high > 0), so
+-- offset_px + high_px <= floor((clip_low+clip_high) * native_px /
+-- total_cells) < native_px (floor(a)+floor(b) <= floor(a+b), and the ratio
+-- is strictly < 1) — an integer strictly less than native_px is at most
+-- native_px - 1, so size_px = native_px - offset_px - high_px >= 1.
+---@param clip_low_cells integer
+---@param clip_high_cells integer
+---@param total_cells integer
+---@param native_px integer
+---@return integer offset_px
+---@return integer size_px
+local function pixel_crop(clip_low_cells, clip_high_cells, total_cells, native_px)
+  local offset_px = math.floor(clip_low_cells * native_px / total_cells)
+  local high_px = math.floor(clip_high_cells * native_px / total_cells)
+  return offset_px, native_px - offset_px - high_px
+end
+M.pixel_crop = pixel_crop
 
 ---@param win integer
 ---@return { top: integer, bottom: integer, left: integer, right: integer }
@@ -282,23 +343,51 @@ local function window_bounds(win)
   }
 end
 
+---@class blit.PlacementResult
+---@field screen_row integer shifted from the raw anchor row when top-clipped
+---@field screen_col integer shifted from the raw anchor col when left-clipped
+---@field cols integer target cell width; shrinks to the visible column span when clipped
+---@field rows integer target cell height; shrinks to the visible row span when clipped
+---@field crop_x? integer present only when column-clipped from the left
+---@field crop_y? integer present only when row-clipped from the top
+---@field crop_w? integer present only when column-clipped from either side
+---@field crop_h? integer present only when row-clipped from either side
+
+-- `winsaveview().topfill` (used in compute_placement's scrolled-off-anchor
+-- fallback below) counts filler/virtual lines above topline for the whole
+-- window, not per-extmark — if another handle's virt_lines block is also
+-- anchored at this handle's own lnum, topfill would reflect their combined
+-- row counts and the fallback's crop math could not be trusted.
 ---@param handle blit.Handle
----@return boolean visible
----@return integer? screen_row
----@return integer? screen_col
+---@return boolean
+local function has_sibling_at_same_lnum(handle)
+  for _, other in ipairs(M._handles) do
+    if
+      other ~= handle
+      and other.buf == handle.buf
+      and other.geometry.lnum == handle.geometry.lnum
+    then
+      return true
+    end
+  end
+  return false
+end
+
+---@param handle blit.Handle
+---@return blit.PlacementResult?
 local function compute_placement(handle)
   if not vim.api.nvim_win_is_valid(handle.win) or not vim.api.nvim_buf_is_valid(handle.buf) then
-    return false
+    return nil
   end
   if vim.api.nvim_win_get_buf(handle.win) ~= handle.buf then
-    return false
+    return nil
   end
   -- screenpos() does not itself account for tab visibility: it keeps
   -- returning a window's real screen row/col even when that window's tab
   -- is not the currently active tabpage (verified) — so visibility must be
   -- checked explicitly here (issue #16).
   if vim.api.nvim_win_get_tabpage(handle.win) ~= vim.api.nvim_get_current_tabpage() then
-    return false
+    return nil
   end
 
   -- virt_lines always render starting at the window's text-area left edge
@@ -308,21 +397,81 @@ local function compute_placement(handle)
   -- to match that, not handle.geometry.col (currently unused for
   -- placement; see the Geometry class doc comment).
   local ok, pos = pcall(vim.fn.screenpos, handle.win, handle.geometry.lnum, 1)
-  if not ok or pos.row == 0 then
-    return false
+  if not ok then
+    return nil
   end
-  -- virt_lines render immediately below the anchor line's own screen row.
-  local screen_row = pos.row + 1
-  local screen_col = pos.col
 
   local bounds = window_bounds(handle.win)
-  if not fully_within(screen_row, handle.geometry.rows, bounds.top, bounds.bottom) then
-    return false
+  local final_row, screen_col, row_lo, row_hi, vis_rows
+
+  if pos.row > 0 then
+    -- virt_lines render immediately below the anchor line's own screen row.
+    local screen_row = pos.row + 1
+    screen_col = pos.col
+    row_lo, row_hi, vis_rows =
+      compute_clip(screen_row, handle.geometry.rows, bounds.top, bounds.bottom)
+    final_row = screen_row + row_lo
+  else
+    -- The anchor line itself has scrolled off (screenpos reports row 0),
+    -- but Neovim's virt_lines rendering treats the anchor line plus its
+    -- reserved rows as one scrollable block (see docs/spec/renderer-
+    -- placement.md's Visibility policy): the tail of that block can still
+    -- be showing at the window's own top edge. `winsaveview().topfill`
+    -- reports exactly how many reserved rows remain visible, but only
+    -- means anything for THIS handle's block when the window's topline has
+    -- landed exactly on the line right after the anchor (confirmed
+    -- empirically: topfill counts down from geometry.rows to 0 across a
+    -- gradual scroll through the block, then topline advances past it and
+    -- topfill resets to 0) — any other topline means the block is either
+    -- not reached yet (impossible here, since pos.row would be > 0) or
+    -- already scrolled fully past.
+    local view = vim.api.nvim_win_call(handle.win, vim.fn.winsaveview)
+    if view.topline ~= handle.geometry.lnum + 1 or view.topfill <= 0 then
+      return nil
+    end
+    if has_sibling_at_same_lnum(handle) then
+      return nil
+    end
+    -- The line right after the anchor is guaranteed visible here (topfill
+    -- counts rows *before* it), so its screen column is a valid stand-in
+    -- for the invisible anchor line's own column (both render virt_lines
+    -- at the same window text-area left edge).
+    local ok2, pos2 = pcall(vim.fn.screenpos, handle.win, view.topline, 1)
+    if not ok2 or pos2.row <= 0 then
+      return nil
+    end
+    screen_col = pos2.col
+    row_lo = math.max(0, handle.geometry.rows - view.topfill)
+    local raw_visible = handle.geometry.rows - row_lo
+    _, row_hi, vis_rows = compute_clip(bounds.top, raw_visible, bounds.top, bounds.bottom)
+    final_row = bounds.top
   end
-  if not fully_within(screen_col, handle.geometry.cols, bounds.left, bounds.right) then
-    return false
+
+  if vis_rows <= 0 then
+    return nil
   end
-  return true, screen_row, screen_col
+  local col_lo, col_hi, vis_cols =
+    compute_clip(screen_col, handle.geometry.cols, bounds.left, bounds.right)
+  if vis_cols <= 0 then
+    return nil
+  end
+
+  ---@type blit.PlacementResult
+  local placement = {
+    screen_row = final_row,
+    screen_col = screen_col + col_lo,
+    cols = vis_cols,
+    rows = vis_rows,
+  }
+  if row_lo > 0 or row_hi > 0 then
+    placement.crop_y, placement.crop_h =
+      pixel_crop(row_lo, row_hi, handle.geometry.rows, handle.native_height)
+  end
+  if col_lo > 0 or col_hi > 0 then
+    placement.crop_x, placement.crop_w =
+      pixel_crop(col_lo, col_hi, handle.geometry.cols, handle.native_width)
+  end
+  return placement
 end
 
 -- Namespace / extmarks ---------------------------------------------------------
@@ -366,26 +515,30 @@ end
 -- Placement / hide --------------------------------------------------------
 
 ---@param handle blit.Handle
+---@param placement blit.PlacementResult
 ---@return blit.terminal.PlacementOpts
-local function placement_opts(handle)
+local function placement_opts(handle, placement)
   return {
-    columns = handle.geometry.cols,
-    rows = handle.geometry.rows,
+    columns = placement.cols,
+    rows = placement.rows,
     z_index = handle.z_index,
     no_move_cursor = true,
+    crop_x = placement.crop_x,
+    crop_y = placement.crop_y,
+    crop_w = placement.crop_w,
+    crop_h = placement.crop_h,
   }
 end
 
 ---@param handle blit.Handle
----@param row integer
----@param col integer
+---@param placement blit.PlacementResult
 ---@return boolean ok
 ---@return string? err
-local function place_existing(handle, row, col)
+local function place_existing(handle, placement)
   local sequences = {
     terminal.build_save_cursor(),
-    terminal.build_move_cursor(row, col),
-    terminal.build_placement(handle.id, placement_opts(handle)),
+    terminal.build_move_cursor(placement.screen_row, placement.screen_col),
+    terminal.build_placement(handle.id, placement_opts(handle, placement)),
     terminal.build_restore_cursor(),
   }
   local ok, err = M._write_fn(sequences)
@@ -433,10 +586,9 @@ end
 -- retransmit for why that's normally forbidden and the narrow, Ghostty-only
 -- exception carved out here.
 ---@param handle blit.Handle
----@param row integer
----@param col integer
+---@param placement blit.PlacementResult
 ---@return boolean ok
-local function retransmit_and_place(handle, row, col)
+local function retransmit_and_place(handle, placement)
   local bytes = read_file(handle.path)
   if not bytes then
     hide_existing(handle)
@@ -453,13 +605,13 @@ local function retransmit_and_place(handle, row, col)
   local sequences = {
     terminal.build_delete(old_id, { free_data = true }),
     terminal.build_save_cursor(),
-    terminal.build_move_cursor(row, col),
+    terminal.build_move_cursor(placement.screen_row, placement.screen_col),
   }
   vim.list_extend(
     sequences,
     terminal.build_transmit(
       bytes,
-      { id = new_id, action = "T", placement = placement_opts(handle) }
+      { id = new_id, action = "T", placement = placement_opts(handle, placement) }
     )
   )
   table.insert(sequences, terminal.build_restore_cursor())
@@ -469,7 +621,7 @@ local function retransmit_and_place(handle, row, col)
     handle.id = new_id
     drop_cache_entry(handle.cache_key, old_id)
     free_id(old_id)
-    register_cache_entry(handle.cache_key, new_id)
+    register_cache_entry(handle.cache_key, new_id, handle.native_width, handle.native_height)
   else
     free_id(new_id)
   end
@@ -501,9 +653,9 @@ M._ghostty_settle_ms = 100
 local function ghostty_retransmit_pass()
   local caps = M._detect_fn()
   for _, handle in ipairs(M._handles) do
-    local visible, row, col = compute_placement(handle)
-    if visible and ghostty_entry_stale(handle, caps.terminal) then
-      retransmit_and_place(handle, row, col)
+    local placement = compute_placement(handle)
+    if placement and ghostty_entry_stale(handle, caps.terminal) then
+      retransmit_and_place(handle, placement)
     end
   end
 end
@@ -555,13 +707,13 @@ local function redraw_all()
   end
 
   for _, handle in ipairs(M._handles) do
-    local visible, row, col = compute_placement(handle)
-    if visible then
+    local placement = compute_placement(handle)
+    if placement then
       if ghostty_entry_stale(handle, caps.terminal) then
-        place_existing(handle, row, col)
+        place_existing(handle, placement)
         schedule_ghostty_retransmit()
       else
-        place_existing(handle, row, col)
+        place_existing(handle, placement)
       end
     else
       -- Resend the hide command unconditionally, even if handle.visible is
@@ -805,9 +957,11 @@ function M.show(path, opts)
   local key = cache_key(path, stat.mtime)
   local entry = acquire_idle_entry(key, caps.terminal)
 
-  local id, bytes, needs_transmit
+  local id, bytes, needs_transmit, native_width, native_height
   if entry then
     id = entry.id
+    native_width = entry.native_width
+    native_height = entry.native_height
     needs_transmit = false
   else
     local read_err
@@ -815,12 +969,23 @@ function M.show(path, opts)
     if not bytes then
       return nil, read_err
     end
+    -- Only IHDR metadata (native pixel width/height) is read here, for
+    -- source-rect crop math (docs/spec/renderer-placement.md) — never a
+    -- full PNG decode. This also newly rejects a non-PNG/corrupt file with
+    -- nil, err before any bytes are ever transmitted, where previously
+    -- show() would silently send garbage to the terminal.
+    local dims, dims_err = png.read_ihdr(bytes)
+    if not dims then
+      return nil, dims_err
+    end
     local alloc_err
     id, alloc_err = alloc_id()
     if not id then
       return nil, alloc_err
     end
-    register_cache_entry(key, id)
+    native_width = dims.width
+    native_height = dims.height
+    register_cache_entry(key, id, native_width, native_height)
     needs_transmit = true
   end
 
@@ -840,23 +1005,28 @@ function M.show(path, opts)
     geometry = { lnum = lnum, col = col, cols = opts.width, rows = opts.height },
     z_index = opts.z_index,
     visible = false,
+    native_width = native_width,
+    native_height = native_height,
   }
   table.insert(M._handles, handle)
   ensure_autocmds()
   M._redraw_fn()
 
-  local visible, screen_row, screen_col = compute_placement(handle)
+  local placement = compute_placement(handle)
 
   if needs_transmit then
     local sequences = {}
-    if visible then
+    if placement then
       table.insert(sequences, terminal.build_save_cursor())
-      table.insert(sequences, terminal.build_move_cursor(screen_row, screen_col))
+      table.insert(
+        sequences,
+        terminal.build_move_cursor(placement.screen_row, placement.screen_col)
+      )
       vim.list_extend(
         sequences,
         terminal.build_transmit(
           bytes,
-          { id = id, action = "T", placement = placement_opts(handle) }
+          { id = id, action = "T", placement = placement_opts(handle, placement) }
         )
       )
       table.insert(sequences, terminal.build_restore_cursor())
@@ -869,9 +1039,9 @@ function M.show(path, opts)
       maybe_teardown_autocmds()
       return nil, err
     end
-    handle.visible = visible
-  elseif visible then
-    local ok, err = place_existing(handle, screen_row, screen_col)
+    handle.visible = placement ~= nil
+  elseif placement then
+    local ok, err = place_existing(handle, placement)
     if not ok then
       destroy_handle(handle, { free_data = true })
       maybe_teardown_autocmds()
