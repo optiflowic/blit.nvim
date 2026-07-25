@@ -17,6 +17,10 @@ local APC_END = ESC .. "\\"
 ---@field rows? integer
 ---@field z_index? integer
 ---@field no_move_cursor? boolean
+---@field crop_x? integer source rectangle pixel offset from the transmitted image's left edge
+---@field crop_y? integer source rectangle pixel offset from the transmitted image's top edge
+---@field crop_w? integer source rectangle pixel width
+---@field crop_h? integer source rectangle pixel height
 
 ---@class blit.terminal.TransmitOpts
 ---@field id integer
@@ -48,6 +52,23 @@ end
 local function append_placement_parts(parts, opts)
   if not opts then
     return
+  end
+  -- Fixed order: source rectangle (x,y,w,h) before target cell box (c,r)
+  -- before meta flags (z,C) — see docs/spec/kitty-graphics.md's Placement
+  -- section. `if opts.crop_x then` (not `> 0`) deliberately: crop_x=0/
+  -- crop_y=0 are legitimate values (e.g. only the bottom or right edge is
+  -- clipped) and Lua's `0` is truthy, so this correctly still emits `x=0`.
+  if opts.crop_x then
+    parts[#parts + 1] = { "x", opts.crop_x }
+  end
+  if opts.crop_y then
+    parts[#parts + 1] = { "y", opts.crop_y }
+  end
+  if opts.crop_w then
+    parts[#parts + 1] = { "w", opts.crop_w }
+  end
+  if opts.crop_h then
+    parts[#parts + 1] = { "h", opts.crop_h }
   end
   if opts.columns then
     parts[#parts + 1] = { "c", opts.columns }

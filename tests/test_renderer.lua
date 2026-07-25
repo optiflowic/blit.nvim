@@ -5,10 +5,40 @@ local ESC = string.char(27)
 local tmp_path
 local opened_wins
 
+local PNG_NATIVE_WIDTH = 100
+local PNG_NATIVE_HEIGHT = 50
+
+---@param n integer
+---@return string
+local function u32be(n)
+  return string.char(
+    math.floor(n / 0x1000000) % 0x100,
+    math.floor(n / 0x10000) % 0x100,
+    math.floor(n / 0x100) % 0x100,
+    n % 0x100
+  )
+end
+
+-- A minimal but structurally valid PNG: signature + one IHDR chunk. No
+-- IDAT/IEND, and the CRC bytes are dummy zeros — blit.png.read_ihdr never
+-- reads past the IHDR chunk data (see lua/blit/png.lua), so this is
+-- sufficient for every test in this file that only needs show() to accept
+-- the file and know its native pixel dimensions.
+---@param width? integer
+---@param height? integer
+---@return string
+local function png_bytes(width, height)
+  local signature = string.char(137, 80, 78, 71, 13, 10, 26, 10)
+  local ihdr_data = u32be(width or PNG_NATIVE_WIDTH)
+    .. u32be(height or PNG_NATIVE_HEIGHT)
+    .. string.char(8, 6, 0, 0, 0)
+  return signature .. u32be(13) .. "IHDR" .. ihdr_data .. string.char(0, 0, 0, 0)
+end
+
 local function make_png_file()
   tmp_path = vim.fn.tempname() .. ".png"
   local f = io.open(tmp_path, "wb")
-  f:write(string.rep("x", 32))
+  f:write(png_bytes())
   f:close()
 end
 
@@ -103,6 +133,97 @@ end
 
 T["fully_within"]["negative anchor is never visible"] = function()
   MiniTest.expect.equality(renderer.fully_within(-1, 1, 1, 10), false)
+end
+
+T["compute_clip"] = MiniTest.new_set()
+
+T["compute_clip"]["fully visible: no clip on either end"] = function()
+  local lo, hi, vis = renderer.compute_clip(5, 3, 5, 7)
+  MiniTest.expect.equality({ lo, hi, vis }, { 0, 0, 3 })
+end
+
+T["compute_clip"]["clipped only at the low (top/left) end"] = function()
+  local lo, hi, vis = renderer.compute_clip(3, 5, 5, 10)
+  MiniTest.expect.equality({ lo, hi, vis }, { 2, 0, 3 })
+end
+
+T["compute_clip"]["clipped only at the high (bottom/right) end"] = function()
+  local lo, hi, vis = renderer.compute_clip(8, 5, 5, 10)
+  MiniTest.expect.equality({ lo, hi, vis }, { 0, 2, 3 })
+end
+
+T["compute_clip"]["clipped at both ends"] = function()
+  local lo, hi, vis = renderer.compute_clip(3, 10, 5, 8)
+  MiniTest.expect.equality({ lo, hi, vis }, { 2, 4, 4 })
+end
+
+T["compute_clip"]["entirely outside bounds: nothing visible"] = function()
+  local _, _, vis = renderer.compute_clip(20, 3, 5, 10)
+  MiniTest.expect.equality(vis, 0)
+end
+
+T["compute_clip"]["anchor <= 0 is never visible"] = function()
+  MiniTest.expect.equality({ renderer.compute_clip(0, 3, 1, 10) }, { 0, 0, 0 })
+  MiniTest.expect.equality({ renderer.compute_clip(-2, 3, 1, 10) }, { 0, 0, 0 })
+end
+
+T["compute_clip"]["agrees with fully_within across the same cases"] = function()
+  local cases = {
+    { 5, 3, 5, 7 },
+    { 5, 4, 5, 7 },
+    { 4, 3, 5, 7 },
+    { 0, 1, 1, 10 },
+    { -1, 1, 1, 10 },
+    { 3, 5, 5, 10 },
+    { 8, 5, 5, 10 },
+    { 20, 3, 5, 10 },
+  }
+  for _, c in ipairs(cases) do
+    local lo, hi, vis = renderer.compute_clip(c[1], c[2], c[3], c[4])
+    local matches_fully_within = (lo == 0 and hi == 0 and vis == c[2])
+    MiniTest.expect.equality(renderer.fully_within(c[1], c[2], c[3], c[4]), matches_fully_within)
+  end
+end
+
+T["pixel_crop"] = MiniTest.new_set()
+
+T["pixel_crop"]["no clip: full native size, zero offset"] = function()
+  local offset, size = renderer.pixel_crop(0, 0, 10, 100)
+  MiniTest.expect.equality({ offset, size }, { 0, 100 })
+end
+
+T["pixel_crop"]["low-only clip, evenly divisible"] = function()
+  local offset, size = renderer.pixel_crop(3, 0, 10, 100)
+  MiniTest.expect.equality({ offset, size }, { 30, 70 })
+end
+
+T["pixel_crop"]["high-only clip, evenly divisible"] = function()
+  local offset, size = renderer.pixel_crop(0, 4, 10, 100)
+  MiniTest.expect.equality({ offset, size }, { 0, 60 })
+end
+
+T["pixel_crop"]["both ends clipped, evenly divisible"] = function()
+  local offset, size = renderer.pixel_crop(2, 3, 10, 100)
+  MiniTest.expect.equality({ offset, size }, { 20, 50 })
+end
+
+T["pixel_crop"]["non-divisible rounding"] = function()
+  -- total_cells=7, native_px=50, clip_low=2: offset = floor(100/7) = 14,
+  -- size = 50 - 14 = 36 (visible span 5/7 * 50 ~= 35.7, rounds up to 36).
+  local offset, size = renderer.pixel_crop(2, 0, 7, 50)
+  MiniTest.expect.equality({ offset, size }, { 14, 36 })
+end
+
+T["pixel_crop"]["native smaller than total cells never yields a non-positive size"] = function()
+  local offset, size = renderer.pixel_crop(4, 0, 5, 1)
+  MiniTest.expect.equality(offset, 0)
+  MiniTest.expect.equality(size >= 1, true)
+end
+
+T["pixel_crop"]["single visible cell out of a large span stays >= 1px"] = function()
+  local offset, size = renderer.pixel_crop(9, 0, 10, 3)
+  MiniTest.expect.equality(size >= 1, true)
+  MiniTest.expect.equality(offset + size <= 3, true)
 end
 
 T["cache_key"] = MiniTest.new_set()
@@ -240,6 +361,22 @@ T["show"]["rejects a non-positive width/height"] = function()
   local ok =
     pcall(renderer.show, tmp_path, { width = 0, height = 3, buf = buf, win = win, lnum = 2 })
   MiniTest.expect.equality(ok, false)
+end
+
+T["show"]["rejects a file that isn't a valid PNG, without writing anything"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local bad_path = vim.fn.tempname() .. ".png"
+  local f = io.open(bad_path, "wb")
+  f:write(string.rep("x", 32))
+  f:close()
+
+  local handle, err =
+    renderer.show(bad_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(handle, nil)
+  MiniTest.expect.equality(type(err), "string")
+  MiniTest.expect.equality(#captured, 0)
+  os.remove(bad_path)
 end
 
 T["show"]["forces a screen redraw before placement (issue #19)"] = function()
@@ -527,6 +664,128 @@ T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function
   local show_all = table.concat(captured[1], "")
   MiniTest.expect.equality(show_all:find("a=p", 1, true) ~= nil, true)
   MiniTest.expect.equality(show_all:find("i=" .. handle.id, 1, true) ~= nil, true)
+end
+
+T["redraw"]["source-rect crop"] = MiniTest.new_set()
+
+T["redraw"]["source-rect crop"]["bottom-clipped placement crops instead of hiding"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 5, buf = buf, win = win, lnum = 8, debounce_ms = 5 }
+  )
+  -- anchor screen row 8, virt_lines rows 9-13; window bottom edge is row 10:
+  -- rows 9-10 visible (2), rows 11-13 clipped (3).
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=d", 1, true), nil)
+  MiniTest.expect.equality(all:find(",r=2", 1, true) ~= nil, true)
+  -- Row-clipped, but not column-clipped: y=0/h= (paired, source rect is
+  -- always y+h together even when the top offset happens to be 0) appear,
+  -- x=/w= (column crop) do not.
+  MiniTest.expect.equality(all:find(",h=", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",x=", 1, true), nil)
+  MiniTest.expect.equality(all:find(",w=", 1, true), nil)
+end
+
+T["redraw"]["source-rect crop"]["right-clipped placement crops instead of hiding"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 25, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  -- anchor screen col 1, span 25 vs. window right edge col 20: 20 visible, 5 clipped.
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=d", 1, true), nil)
+  MiniTest.expect.equality(all:find(",c=20", 1, true) ~= nil, true)
+  -- Column-clipped, but not row-clipped: x=0/w= (paired) appear, y=/h=
+  -- (row crop) do not.
+  MiniTest.expect.equality(all:find(",w=", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",y=", 1, true), nil)
+  MiniTest.expect.equality(all:find(",h=", 1, true), nil)
+end
+
+T["redraw"]["source-rect crop"]["fully visible placement never emits crop keys"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  local all = table.concat(captured[1], "")
+  for _, key in ipairs({ ",x=", ",y=", ",w=", ",h=" }) do
+    MiniTest.expect.equality(all:find(key, 1, true), nil)
+  end
+end
+
+T["redraw"]["source-rect crop"]["shows a cropped tail (not a blank gap) while scrolling through the reserved rows (issue #6)"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  vim.wo[win].scrolloff = 0
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 5, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  -- Scroll gradually (matching real <C-e>-held-down usage) through the
+  -- anchor line's reserved virt_lines block, cursor left on the anchor line
+  -- itself (scrolloff=0 lets it be pushed along rather than forcing a jump
+  -- scroll — jumping the cursor far away first, e.g. to line 15, makes
+  -- Neovim snap the window past the whole block in one non-gradual leap,
+  -- skipping every intermediate topfill state entirely; verified empirically
+  -- and confirmed the wrong way to drive this). This is the exact scenario
+  -- the known limitation described: the anchor line's own screenpos goes to
+  -- row 0 (fully scrolled off) partway through, while Neovim's own
+  -- rendering still shows the tail of the reserved rows at the window's
+  -- top edge.
+  local ctrl_e = vim.api.nvim_replace_termcodes("<C-e>", true, true, true)
+  for _ = 1, 3 do
+    vim.api.nvim_win_call(win, function()
+      vim.cmd("normal! " .. ctrl_e)
+    end)
+    vim.cmd("redraw")
+  end
+  MiniTest.expect.equality(vim.api.nvim_win_call(win, vim.fn.winsaveview).topfill, 3)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=d", 1, true), nil)
+  -- 5-row block, topfill=3 remaining -> 2 rows clipped from the top, 3 visible.
+  MiniTest.expect.equality(all:find(",r=3", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",y=", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",h=", 1, true) ~= nil, true)
+end
+
+T["redraw"]["source-rect crop"]["hides once the reserved block has fully scrolled past (topfill exhausted)"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  vim.wo[win].scrolloff = 0
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 5, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  local ctrl_e = vim.api.nvim_replace_termcodes("<C-e>", true, true, true)
+  for _ = 1, 6 do
+    vim.api.nvim_win_call(win, function()
+      vim.cmd("normal! " .. ctrl_e)
+    end)
+    vim.cmd("redraw")
+  end
+  MiniTest.expect.equality(vim.api.nvim_win_call(win, vim.fn.winsaveview).topfill, 0)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+
+  MiniTest.expect.equality(handle.visible, false)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
 end
 
 ---@return boolean

@@ -18,9 +18,9 @@ No ImageMagick. No luarocks. No external binaries. Pure Lua.
 
 Status: early v0.x. `show()` places a PNG at a buffer position using
 reserved `virt_lines` and the kitty graphics protocol; `clear()` and
-`clear_all()` remove placements. An image is only ever shown fully visible
-— if scrolling would cut it off at a window edge, it is hidden until it
-fully fits again (no partial/cropped placements in v0.x). See
+`clear_all()` remove placements. A placement scrolled partway past a window
+edge shows a cropped slice of the image rather than disappearing; it is
+hidden only once it has no overlap with the window at all. See
 `docs/spec/renderer-placement.md` in the repository for the full design.
 
 ==============================================================================
@@ -54,7 +54,8 @@ setup({opts})
 show({path}, {opts})
     Show the PNG at {path} anchored under buffer line {opts.lnum}.
     Returns a handle table on success, or `nil, err_msg` on failure
-    (unsupported environment, missing/oversized file, or bad arguments).
+    (unsupported environment, missing/oversized file, not a valid PNG,
+    or bad arguments).
 
     {opts} is a table:
       width       (required) target placement width, in cell columns
@@ -68,9 +69,12 @@ show({path}, {opts})
                   extmark's column. Reserved for future use.
       z_index     kitty placement z-index (default: unset)
 
-    blit does not read the PNG's pixel dimensions or auto-size from aspect
-    ratio in v0.x — {opts.width}/{opts.height} are the exact cell counts
-    kitty is asked to fit the image into.
+    blit reads the PNG's native pixel dimensions solely to support cropping
+    a partially-visible placement (e.g. a placement scrolled halfway off a
+    window edge shows a cropped slice instead of hiding entirely); there is
+    still no aspect-ratio-preserving auto-sizing — {opts.width}/{opts.height}
+    remain the exact required cell counts kitty is asked to fit the image
+    into.
 
                                                               *blit.clear()*
 clear({handle})

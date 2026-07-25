@@ -30,7 +30,9 @@ Every command is an APC (Application Program Command) escape sequence:
 | `q` | quiet | `2` (suppress all responses) always, see "Response handling" below |
 | `m` | more chunks | `1` (more chunks follow) / `0` (last chunk) |
 | `p` | placement id | always `1` (blit's single fixed placement id — see "Placement" below) |
-| `c`, `r` | placement columns/rows | caller-supplied, cell-fit dimensions |
+| `c`, `r` | placement columns/rows | shrink to the visible cell span when a placement is partially clipped, see "Source-rectangle cropping" below |
+| `x`, `y` | source rectangle pixel offset (left/top) into the transmitted image | present only when a placement is partially clipped; see "Source-rectangle cropping" below |
+| `w`, `h` | source rectangle pixel size | present only when a placement is partially clipped; see "Source-rectangle cropping" below |
 | `z` | z-index | caller-supplied |
 | `C` | cursor movement | `1` (don't move cursor) when requested |
 | `d` | delete unit (only with `a=d`) | `i` (delete placements for one owned id) or `I` (also free stored pixel data for one owned id) — **never `a`** (delete-all) |
@@ -69,7 +71,56 @@ Every command is an APC (Application Program Command) escape sequence:
   a given image id "active" for a single handle at a time, so a constant
   `p=1` can never collide with a second live placement of the same id.
 - Optional placement keys, in the fixed order blit emits them: `p=` (always
-  present when placing), `c=`, `r=`, `z=`, `C=1` (only present if requested).
+  present when placing), `x=`, `y=`, `w=`, `h=` (source rectangle, only when
+  cropped — see "Source-rectangle cropping" below), `c=`, `r=` (target cell
+  box), `z=`, `C=1` (only present if requested).
+
+## Source-rectangle cropping
+
+kitty's placement command accepts a source rectangle (`x`, `y`, `w`, `h`, all
+pixel values into the previously transmitted image) alongside the target cell
+box (`c`, `r`). blit uses this to show a partially-visible placement as a
+cropped slice rather than hiding it entirely — see
+`docs/spec/renderer-placement.md`'s "Visibility policy" for the row/column
+clip-amount math (`compute_clip`) and the pixel-space conversion
+(`pixel_crop`), both in `lua/blit/renderer.lua`.
+
+- `x`/`y` are the pixel offset of the crop's top-left corner within the
+  transmitted image; `w`/`h` are its pixel size. All four are computed
+  proportionally from how many cell rows/columns of the placement's original
+  target span are clipped on each side, against the image's *native* pixel
+  dimensions (read once via `lua/blit/png.lua`'s IHDR reader — metadata only,
+  never a full PNG decode; this doesn't touch the PNG-only/zero-dependency
+  constraints since no pixel data is ever read by blit itself).
+- All four keys are emitted together only when at least one axis is
+  clipped; an unclipped placement omits them entirely (zero escape-sequence
+  byte cost in the common case). `x=0`/`y=0` are legitimate, explicitly-sent
+  values (e.g. only the far edge of a placement is clipped) — blit checks
+  `~= nil`, not truthiness-as-"present", so a genuine `0` offset is never
+  dropped.
+- `c=`/`r=` shrink to the visible cell span (not the placement's original
+  full `width`/`height`) whenever the corresponding axis is cropped, so the
+  cropped slice renders at the correct on-screen size instead of being
+  stretched to fill the original box.
+- **Assumed, pending manual verification** (see `docs/manual-testing.md`):
+  re-issuing `a=p` with no `x=`/`y=`/`w=`/`h=` at all (the placement having
+  previously been cropped, now fully back in view) is expected to reset the
+  placement to showing the complete, uncropped image — i.e. the terminal
+  does not remember a prior call's crop rectangle across placement commands,
+  the same way `c=`/`r=`/`z=` are already treated as fully-specified-per-call
+  rather than incrementally patched. Unverified on a real kitty/WezTerm/
+  Ghostty terminal as of this writing (only exercised in headless Neovim,
+  which never talks to a real terminal). If a real terminal instead retains
+  the last explicit crop rectangle, the fix is to always emit the full
+  rectangle explicitly (`x=0,y=0,w=native_width,h=native_height`) once a
+  handle has ever been cropped, rather than omitting it — a small, contained
+  change to `placement_opts` in `lua/blit/renderer.lua`, not a redesign.
+- This only affects `a=p`/`a=T`'s placement sub-table; it never causes a
+  re-transmit (`a=T` with fresh pixel data) on its own — `renderer.lua`'s
+  `redraw_all` still only ever repositions (`a=p`) or hides (`a=d`) on a
+  scroll/resize-driven redraw pass, satisfying AGENTS.md's "never re-transmit
+  on scroll/resize" rule (the pre-existing, narrow Ghostty resize exception
+  is unrelated to cropping).
 
 ## Deletion
 
