@@ -971,11 +971,63 @@ local function is_positive_integer(v)
   return type(v) == "number" and v == math.floor(v) and v > 0
 end
 
+---@param v any
+---@return boolean
+local function is_positive_integer_or_nil(v)
+  return v == nil or is_positive_integer(v)
+end
+
+-- Fills in whichever of width/height the caller omitted, preserving the
+-- PNG's native aspect ratio under an assumed terminal cell aspect ratio
+-- (docs/spec/renderer-placement.md's "Reserving space: virt_lines" —
+-- blit never queries the terminal's real cell-pixel size, so this is an
+-- approximation, not exact). When both are given, they pass through
+-- unchanged: no validation against the native aspect ratio, since a caller
+-- that already picked both dimensions on purpose (e.g. to stretch/fit a
+-- window) should not be overridden. Derivation: displayed px width/height
+-- is cols*cell_width_px / rows*cell_height_px; setting that ratio equal to
+-- native_width/native_height and solving for the missing side of cols/rows
+-- yields the two branches below, both scaled by cell_aspect_ratio
+-- (cell_width_px/cell_height_px). Result is clamped to >= 1 cell.
+---@param opts_width integer? caller-supplied cell width
+---@param opts_height integer? caller-supplied cell height
+---@param native_width integer PNG native pixel width
+---@param native_height integer PNG native pixel height
+---@param cell_aspect_ratio number assumed cell width-px/height-px ratio
+---@return integer? width
+---@return integer? height
+---@return string? err
+local function resolve_cell_size(
+  opts_width,
+  opts_height,
+  native_width,
+  native_height,
+  cell_aspect_ratio
+)
+  if opts_width and opts_height then
+    return opts_width, opts_height
+  end
+  if opts_width then
+    local height = opts_width * cell_aspect_ratio * native_height / native_width
+    return opts_width, math.max(1, math.floor(height + 0.5))
+  end
+  if opts_height then
+    local width = opts_height * (native_width / native_height) / cell_aspect_ratio
+    return math.max(1, math.floor(width + 0.5)), opts_height
+  end
+  return nil, nil, "blit: opts.width or opts.height is required"
+end
+M.resolve_cell_size = resolve_cell_size
+
 -- Public API ------------------------------------------------------------------
 
 ---@class blit.ShowOpts
----@field width integer target placement width in cell columns
----@field height integer target placement height in cell rows
+---@field width? integer target placement width in cell columns; if omitted,
+---derived from {height} and the PNG's native aspect ratio. One of
+---{width}/{height} is required.
+---@field height? integer target placement height in cell rows; if omitted,
+---derived from {width} and the PNG's native aspect ratio. One of
+---{width}/{height} is required.
 ---@field buf? integer defaults to the current buffer of {win}
 ---@field win? integer defaults to the current window
 ---@field lnum? integer 1-indexed anchor line, defaults to {win}'s cursor line
@@ -985,6 +1037,9 @@ end
 ---@field z_index? integer
 ---@field max_file_bytes? integer defaults to blit.config.defaults.max_file_bytes
 ---@field debounce_ms? integer defaults to the last configured value (initially 16)
+---@field cell_aspect_ratio? number assumed cell width-px/height-px ratio,
+---used only to derive an omitted {width}/{height}; defaults to
+---blit.config.defaults.cell_aspect_ratio
 
 ---@param path string
 ---@param opts blit.ShowOpts
@@ -993,8 +1048,15 @@ end
 function M.show(path, opts)
   vim.validate({ path = { path, "string" }, opts = { opts, "table" } })
   vim.validate({
-    width = { opts.width, is_positive_integer, "a positive integer (cell columns)" },
-    height = { opts.height, is_positive_integer, "a positive integer (cell rows)" },
+    width = { opts.width, is_positive_integer_or_nil, "a positive integer (cell columns), or nil" },
+    height = { opts.height, is_positive_integer_or_nil, "a positive integer (cell rows), or nil" },
+    width_or_height = {
+      opts.width or opts.height,
+      function(v)
+        return v ~= nil
+      end,
+      "opts.width or opts.height (at least one is required)",
+    },
     buf = { opts.buf, "number", true },
     win = { opts.win, "number", true },
     lnum = { opts.lnum, "number", true },
@@ -1002,6 +1064,7 @@ function M.show(path, opts)
     z_index = { opts.z_index, "number", true },
     max_file_bytes = { opts.max_file_bytes, "number", true },
     debounce_ms = { opts.debounce_ms, "number", true },
+    cell_aspect_ratio = { opts.cell_aspect_ratio, "number", true },
   })
 
   local caps = M._detect_fn()
@@ -1062,9 +1125,16 @@ function M.show(path, opts)
     needs_transmit = true
   end
 
+  local cell_aspect_ratio = opts.cell_aspect_ratio or config.defaults.cell_aspect_ratio
+  local width, height, size_err =
+    resolve_cell_size(opts.width, opts.height, native_width, native_height, cell_aspect_ratio)
+  if not width then
+    return nil, size_err
+  end
+
   local ns = ensure_namespace()
   local extmark_id = vim.api.nvim_buf_set_extmark(buf, ns, lnum - 1, 0, {
-    virt_lines = build_virt_lines(opts.height),
+    virt_lines = build_virt_lines(height),
   })
 
   ---@type blit.Handle
@@ -1075,7 +1145,7 @@ function M.show(path, opts)
     extmark_id = extmark_id,
     path = path,
     cache_key = key,
-    geometry = { lnum = lnum, col = col, cols = opts.width, rows = opts.height },
+    geometry = { lnum = lnum, col = col, cols = width, rows = height },
     z_index = opts.z_index,
     visible = false,
     native_width = native_width,

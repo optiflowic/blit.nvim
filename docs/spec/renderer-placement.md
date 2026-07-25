@@ -13,18 +13,24 @@ never constructs escape sequences itself.
 ## Reserving space: virt_lines
 
 `show()` creates one extmark per handle, anchored at the caller's `lnum`
-(1-indexed) with `opts.height` empty `virt_lines` attached. The anchor
-buffer line itself is left untouched (e.g. a markdown `![alt](path)` line
-stays intact); the image renders into the reserved blank lines immediately
-below it. `opts.width`/`opts.height` are cell counts (columns/rows) the
-caller must supply explicitly and remain mandatory — blit reads the PNG's
-*native pixel* dimensions (`lua/blit/png.lua`'s IHDR reader) solely to
-support cropping a partially-visible placement (see "Visibility policy"
-below), not for aspect-ratio-preserving auto-sizing: blit still does not
-query the terminal's cell-pixel size (that would require reading an async
-protocol response, out of scope per `docs/spec/kitty-graphics.md`'s
-"Response handling" section), so there is no way to convert a native pixel
-size into a cell count on blit's own. One handle = one entry in
+(1-indexed) with the resolved `height` (see below) of empty `virt_lines`
+attached. The anchor buffer line itself is left untouched (e.g. a markdown
+`![alt](path)` line stays intact); the image renders into the reserved
+blank lines immediately below it. `opts.width`/`opts.height` are cell
+counts (columns/rows); at least one is required, but not both — blit reads
+the PNG's *native pixel* dimensions (`lua/blit/png.lua`'s IHDR reader) both
+to support cropping a partially-visible placement (see "Visibility policy"
+below) and, when the caller omits one of `width`/`height`,
+`resolve_cell_size` derives it from the other under an assumed cell aspect
+ratio (`opts.cell_aspect_ratio`, defaulting to `config.defaults.cell_aspect_ratio`
+= 0.5 — a typical monospace terminal cell's width-px/height-px ratio). This
+is only ever an approximation: blit still does not query the terminal's
+real cell-pixel size (that would require reading an async protocol
+response, out of scope per `docs/spec/kitty-graphics.md`'s "Response
+handling" section), so a caller on an unusually wide or narrow font gets a
+slightly off aspect ratio unless it supplies both dimensions itself. When
+the caller supplies both, they pass through unvalidated — blit never
+overrides an intentional stretch/fit. One handle = one entry in
 `M._handles`, shaped `{ id, buf, win, extmark_id, path, cache_key, geometry,
 z_index, visible, native_width, native_height }`, matching `AGENTS.md`'s
 "one image = one handle table" rule.
