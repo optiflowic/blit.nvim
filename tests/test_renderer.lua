@@ -226,6 +226,35 @@ T["pixel_crop"]["single visible cell out of a large span stays >= 1px"] = functi
   MiniTest.expect.equality(offset + size <= 3, true)
 end
 
+T["resolve_cell_size"] = MiniTest.new_set()
+
+T["resolve_cell_size"]["both given: passes through unchanged, no aspect-ratio validation"] = function()
+  local width, height, err = renderer.resolve_cell_size(10, 3, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 10, 3, nil })
+end
+
+T["resolve_cell_size"]["width given: derives height from the native aspect ratio"] = function()
+  local width, height, err = renderer.resolve_cell_size(10, nil, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 10, 3, nil })
+end
+
+T["resolve_cell_size"]["height given: derives width from the native aspect ratio"] = function()
+  local width, height, err = renderer.resolve_cell_size(nil, 4, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 16, 4, nil })
+end
+
+T["resolve_cell_size"]["derived dimension never rounds down to zero, clamps to 1"] = function()
+  local width, height, err = renderer.resolve_cell_size(nil, 1, 1, 100, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 1, 1, nil })
+end
+
+T["resolve_cell_size"]["neither given: returns an error, no dimensions"] = function()
+  local width, height, err = renderer.resolve_cell_size(nil, nil, 100, 50, 0.5)
+  MiniTest.expect.equality(width, nil)
+  MiniTest.expect.equality(height, nil)
+  MiniTest.expect.equality(type(err), "string")
+end
+
 T["cache_key"] = MiniTest.new_set()
 
 T["cache_key"]["combines path and mtime"] = function()
@@ -361,6 +390,46 @@ T["show"]["rejects a non-positive width/height"] = function()
   local ok =
     pcall(renderer.show, tmp_path, { width = 0, height = 3, buf = buf, win = win, lnum = 2 })
   MiniTest.expect.equality(ok, false)
+end
+
+T["show"]["rejects omitting both width and height"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local ok = pcall(renderer.show, tmp_path, { buf = buf, win = win, lnum = 2 })
+  MiniTest.expect.equality(ok, false)
+end
+
+T["show"]["width-only: derives height from the PNG's native aspect ratio (issue #8)"] = function()
+  -- tmp_path is PNG_NATIVE_WIDTH x PNG_NATIVE_HEIGHT (100x50, 2:1) via
+  -- make_png_file(); with the default cell_aspect_ratio (0.5), width=10
+  -- derives height=3 (see the resolve_cell_size unit tests above for the math).
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local handle, err = renderer.show(tmp_path, { width = 10, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(handle.geometry.cols, 10)
+  MiniTest.expect.equality(handle.geometry.rows, 3)
+end
+
+T["show"]["height-only: derives width from the PNG's native aspect ratio (issue #8)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local handle, err = renderer.show(tmp_path, { height = 4, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(handle.geometry.cols, 16)
+  MiniTest.expect.equality(handle.geometry.rows, 4)
+end
+
+T["show"]["cell_aspect_ratio opt overrides the config default"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local handle, err =
+    renderer.show(tmp_path, { width = 10, cell_aspect_ratio = 1, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(handle.geometry.cols, 10)
+  MiniTest.expect.equality(handle.geometry.rows, 5)
 end
 
 T["show"]["rejects a file that isn't a valid PNG, without writing anything"] = function()
