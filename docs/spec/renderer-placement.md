@@ -384,7 +384,32 @@ gets (re)started when `ghostty_entry_stale()` comes back true, which only
 happens right after a genuine resize (scroll-only redraw passes never flip
 it), so the cost is bounded to roughly once per real Ghostty resize
 gesture per visible handle — see AGENTS.md's Performance Rules section for
-the carved-out wording. Kitty and WezTerm are unaffected:
+the carved-out wording.
+
+**A settle-timer pass that leaves a handle still stale gets a bounded
+number of retries of its own (issue #37).** `ghostty_retransmit_pass()` can
+find a handle still `ghostty_entry_stale()` after it runs even though no
+further `WinResized`/`WinScrolled` restarted the timer: `compute_placement()`
+can come back `nil` for that one tick (a real drag-resize's tail end can
+still race `vim.fn.screenpos()`), or `retransmit_and_place()`'s write itself
+can fail (`write_all()` exhausting its bounded EAGAIN retries — see
+`terminal.lua`). Before this was fixed, either case left the placement
+blank until the user happened to trigger another resize purely by luck —
+manual testing observed this intermittently on a slow, continuous drag
+crossing several cell sizes. `ghostty_retransmit_pass()` now re-arms its own
+timer (`arm_ghostty_retransmit_timer()`) up to `GHOSTTY_RETRANSMIT_RETRIES`
+(3) additional times whenever a pass ends with any handle still stale,
+mirroring `DESTROY_DELETE_RETRIES` above (issue #27) — same shape of
+problem, an escape-sequence-driven recovery with no response to confirm
+success by. `schedule_ghostty_retransmit()` (the entry point `redraw_all()`
+calls on a genuine detection) resets the retry budget back to the max each
+time, so a fresh resize gesture always gets the full budget; only the
+self-rescheduled retries within a single settle window consume it. Bounded,
+not indefinite, so a handle that's genuinely gone (e.g. its window closed)
+can't keep the timer alive forever, preserving AGENTS.md's "fully
+quiescent idle" rule.
+
+Kitty and WezTerm are unaffected:
 `ghostty_entry_stale()` short-circuits to `false` for any other terminal,
 so their redraw path is unchanged, and the settle timer is never even
 created for them. Like `debounce_timer`, `ghostty_retransmit_timer` is
