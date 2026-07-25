@@ -49,21 +49,26 @@ Accepted for v0.x; revisit when #10 ships.
 screen row/col, or `row = 0` if that position is not currently rendered at
 all (scrolled off, inside a closed fold, wrong window). `renderer.lua` calls
 this with the anchor line and column 1 — always column 1, never
-`geometry.col` — then adds 1 to the returned row to get the first screen row
-of the reserved `virt_lines` block (they render immediately below the
-anchor line's own rendered row). Column 1 is used unconditionally because
-`virt_lines` always render starting at the window's text-area left edge,
-independent of the extmark's own column (the extmark itself is created at a
-hardcoded column 0 below); `geometry.col`/`opts.col` is currently unused for
-placement, reserved for a future version that supports horizontal
-positioning some other way.
+`geometry.col` — to get the anchor's screen column and to test visibility.
+Column 1 is used unconditionally because `virt_lines` always render starting
+at the window's text-area left edge, independent of the extmark's own
+column (the extmark itself is created at a hardcoded column 0 below);
+`geometry.col`/`opts.col` is currently unused for placement, reserved for a
+future version that supports horizontal positioning some other way.
 
-**Known limitation**: this assumes the anchor line occupies exactly one
-screen row. With `'wrap'` on and a long anchor line, the true virt_lines
-start row is pushed down by however many extra wrapped rows the anchor line
-takes — not computed here. Accepted for v0.x; revisit if real usage hits it
-(matches the "known false-negative/false-positive risks" pattern used in
-`docs/spec/terminal-detection.md`).
+The reserved `virt_lines` block's first screen row is one past the anchor
+line's own **last** rendered screen row, not its first — under `'wrap'` a
+long anchor line can span several screen rows, and `virt_lines` render below
+all of them (issue #7). `anchor_last_row()` finds that last row by calling
+`screenpos()` a second time, at the anchor line's own final byte column
+instead of column 1: Neovim's display engine already maps a buffer column to
+its wrapped screen row, accounting for `'breakindent'`/`'showbreak'`, so no
+wrap-width math is duplicated here. If that second `screenpos()` call itself
+reports `row = 0` (the wrap tail scrolled past the window's bottom edge,
+while column 1 of the same line is still visible higher up), the reserved
+block is entirely below the window too — `compute_placement` substitutes
+`bounds.bottom` so the subsequent `compute_clip` call reports zero visible
+rows, hiding the placement, matching what a real terminal would show.
 
 **Verified quirk**: `screenpos()` does not account for tab visibility — it
 keeps returning a window's real screen row/col even when that window

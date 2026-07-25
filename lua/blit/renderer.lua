@@ -373,6 +373,29 @@ local function has_sibling_at_same_lnum(handle)
   return false
 end
 
+-- Under 'wrap', the anchor line can occupy more than one screen row, and
+-- virt_lines render immediately below its LAST wrapped row, not its first
+-- (issue #7). screenpos() already maps a buffer column to the correct
+-- wrapped screen row — including 'breakindent'/'showbreak' effects — so
+-- querying it at the line's own last byte column (instead of column 1)
+-- yields that last row directly, with no wrap-width math of our own needed.
+-- Returns 0 if that last column is not currently rendered at all (its wrap
+-- tail has scrolled past the window's bottom edge, even though column 1 of
+-- the same line is still visible there).
+---@param win integer
+---@param buf integer
+---@param lnum integer
+---@return integer row 0 if the line's last column is not rendered
+local function anchor_last_row(win, buf, lnum)
+  local line = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
+  local last_col = math.max(1, #line)
+  local ok, pos = pcall(vim.fn.screenpos, win, lnum, last_col)
+  if not ok or pos.row <= 0 then
+    return 0
+  end
+  return pos.row
+end
+
 ---@param handle blit.Handle
 ---@return blit.PlacementResult?
 local function compute_placement(handle)
@@ -405,8 +428,14 @@ local function compute_placement(handle)
   local final_row, screen_col, row_lo, row_hi, vis_rows
 
   if pos.row > 0 then
-    -- virt_lines render immediately below the anchor line's own screen row.
-    local screen_row = pos.row + 1
+    -- virt_lines render immediately below the anchor line's own LAST
+    -- rendered screen row (see anchor_last_row's comment above). If that
+    -- last row is itself off-screen (the line's wrap tail ran past the
+    -- window's bottom edge, even though its first row at pos.row is still
+    -- visible), the reserved block is entirely below the window too —
+    -- bounds.bottom + 1 makes compute_clip below report zero visible rows.
+    local last_row = anchor_last_row(handle.win, handle.buf, handle.geometry.lnum)
+    local screen_row = (last_row > 0 and last_row or bounds.bottom) + 1
     screen_col = pos.col
     row_lo, row_hi, vis_rows =
       compute_clip(screen_row, handle.geometry.rows, bounds.top, bounds.bottom)
