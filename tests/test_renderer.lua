@@ -831,6 +831,38 @@ T["redraw"]["source-rect crop"]["two handles anchored at the same lnum hide inst
   MiniTest.expect.equality(handle_b.visible, false)
 end
 
+T["redraw"]["wrapped anchor line"] = MiniTest.new_set()
+
+T["redraw"]["wrapped anchor line"]["places virt_lines below the anchor's LAST wrapped row, not its first (issue #7)"] = function()
+  -- 45 'x's at window width 20 wraps line 2 across rows 2, 3, 4 — virt_lines
+  -- must start at row 5, not row 3 (pos.row + 1 using only the first wrapped row).
+  local long_line = string.rep("x", 45)
+  local buf, win = setup_floating({ "line 1", long_line, "line 3" }, 20, 15)
+  renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[5;1H", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(ESC .. "[3;1H", 1, true), nil)
+end
+
+T["redraw"]["wrapped anchor line"]["hides when the wrap tail scrolls past the window's bottom edge"] = function()
+  -- 100 'x's wraps into 5 rows at width 20 (rows 1-5), but the window is only
+  -- 3 rows tall: the anchor's first row (1) renders, its last wrapped row
+  -- (5) does not — the reserved block is entirely off-screen too.
+  local long_line = string.rep("x", 100)
+  local buf, win = setup_floating({ long_line, "line 2" }, 20, 3)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, false)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true), nil)
+  MiniTest.expect.equality(all:find("a=t,", 1, true) ~= nil, true)
+end
+
 ---@return boolean
 local function any_captured_has(needle)
   for _, seq in ipairs(captured) do
