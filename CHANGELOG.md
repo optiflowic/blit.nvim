@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v0.1.0...blit.nvim-v0.2.0) (2026-07-25)
+
+
+### Features
+
+* crop partially-visible placements instead of hiding them ([#39](https://github.com/optiflowic/blit.nvim/issues/39)) ([44a9477](https://github.com/optiflowic/blit.nvim/commit/44a9477fe63e1485120427fd79df7037a34ed7e3))
+* derive an omitted show() width/height from the PNG's native aspect ratio ([#45](https://github.com/optiflowic/blit.nvim/issues/45)) ([3273414](https://github.com/optiflowic/blit.nvim/commit/3273414a452c9dc05b60f4c312259e5791d0fe8e))
+
+
+### Bug Fixes
+
+* account for wrapped anchor line rows when placing virt_lines ([#41](https://github.com/optiflowic/blit.nvim/issues/41)) ([ae0fda8](https://github.com/optiflowic/blit.nvim/commit/ae0fda855030e6691cb4de46caeceb1d2f527a57)), closes [#7](https://github.com/optiflowic/blit.nvim/issues/7)
+* remove release-as pin from release-please-config.json ([#44](https://github.com/optiflowic/blit.nvim/issues/44)) ([d921a23](https://github.com/optiflowic/blit.nvim/commit/d921a235dc130200d3f2f75f8ce7d51eabb7c5d4)), closes [#43](https://github.com/optiflowic/blit.nvim/issues/43)
+* retry a failed Ghostty resize retransmit without a further resize ([#42](https://github.com/optiflowic/blit.nvim/issues/42)) ([df820e6](https://github.com/optiflowic/blit.nvim/commit/df820e65116276600115a7775b7f04bf1fab4712))
+
 ## 0.1.0 (2026-07-25)
 
 
