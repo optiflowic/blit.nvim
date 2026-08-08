@@ -6,11 +6,13 @@
 Zero-dependency image rendering for Neovim via the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 
-> **Status**: v0.1.0 released. `show()`/`clear()`/`clear_all()` render and remove
+> **Status**: v0.2.0 released. `show()`/`clear()`/`clear_all()` render and remove
 > PNG placements via the kitty graphics protocol. A placement scrolled
 > partway past a window edge shows a cropped slice of the image rather than
 > disappearing; it's hidden only once it has no overlap with the window at
-> all. See `docs/spec/renderer-placement.md` for the design.
+> all. `width`/`height` in `show()` are optional — an omitted dimension is
+> derived from the PNG's native aspect ratio. See
+> `docs/spec/renderer-placement.md` for the design.
 
 ## Requirements
 
@@ -39,6 +41,19 @@ Run `:checkhealth blit` to see detection results for your environment.
 
 See `AGENTS.md` for the full set of project constraints and architecture.
 
+## Known Issues
+
+- **WezTerm: process crash under sustained fast scrolling** ([#31](https://github.com/optiflowic/blit.nvim/issues/31)).
+  Scrolling quickly and continuously with an image anchored away from the top
+  of the buffer can crash the WezTerm process itself (not just the pane),
+  taking the Neovim session down with it. Root cause is confirmed WezTerm-side
+  (an unbounded render-quad count under placement reposition + scroll, filed
+  upstream as [wezterm/wezterm#7953](https://github.com/wezterm/wezterm/issues/7953))
+  with a verified fix, but that fix hasn't shipped in a WezTerm release yet.
+  Nothing to change on blit's side — this will be re-verified and closed once
+  the fix lands upstream. Until then, avoid sustained fast scrolling on WezTerm
+  while an image is anchored far down a long buffer.
+
 ## Development
 
 ```sh
@@ -55,6 +70,17 @@ requests use the [issue templates](https://github.com/optiflowic/blit.nvim/issue
 general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/discussions).
 
 ## Changelog
+
+### v0.2.0 (2026-08-08)
+
+- Renderer: a placement scrolled partway past a window edge shows a cropped
+  slice of the image instead of being hidden; it's hidden only once it has no
+  overlap with the window at all (`lua/blit/renderer.lua`).
+- `show()`: an omitted `width` or `height` is derived from the PNG's native
+  aspect ratio instead of being required.
+- Fixed a wrapped anchor-line row miscalculation in `virt_lines` placement,
+  and a Ghostty resize-retransmit retry that could get stuck after a failed
+  attempt.
 
 ### v0.1.0 (2026-07-25)
 
