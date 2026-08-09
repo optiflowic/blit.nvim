@@ -12,6 +12,12 @@ local REASON_MESSAGES = {
   unsupported_terminal = "no supported terminal detected (kitty, WezTerm, Ghostty); silent no-op.",
 }
 
+local WEZTERM_CRASH_WARNING = "known issue: sustained fast scrolling with an image anchored "
+  .. "away from the top of the buffer can crash the WezTerm process (data loss risk). "
+  .. "Root cause confirmed WezTerm-side, fix verified but not yet released upstream "
+  .. "(https://github.com/wezterm/wezterm/issues/7953). See "
+  .. "https://github.com/optiflowic/blit.nvim/issues/31 and README's Known Issues section."
+
 function M.check()
   vim.health.start("blit")
 
@@ -27,6 +33,10 @@ function M.check()
     vim.health.ok("Terminal detected: " .. caps.terminal)
   else
     vim.health.warn("No supported terminal detected (kitty, WezTerm, Ghostty)")
+  end
+
+  if caps.terminal == "wezterm" then
+    vim.health.warn(WEZTERM_CRASH_WARNING)
   end
 
   if caps.supported then
