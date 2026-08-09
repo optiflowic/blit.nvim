@@ -98,6 +98,21 @@ WezTerm (and Ghostty when available) before tagging a release.
       few debounce intervals with zero further input should still be enough
       to clear it. Pixels stuck past that point (or a second `clear_all()`
       call needed to clear them) are a regression.
+- [ ] **Known limitation, not a release blocker** (issue #31): anchor an
+      image ~50 lines down in a long buffer, then scroll continuously (e.g.
+      hold `<C-e>` or `j`) so its screen row sweeps through many distinct
+      rows. Confirm the WezTerm process crash still reproduces about the
+      same way (rendering gets sluggish within ~10 lines of scroll, then the
+      WezTerm process itself dies within a few seconds). Root cause is
+      confirmed WezTerm-side (wezterm/wezterm#7953), with a fix verified but
+      not yet released upstream — this item is *expected* to still fail and
+      must not block tagging the release. Only stop and escalate if:
+      (a) it no longer reproduces at all — check whether the WezTerm version
+      under test already includes wezterm/wezterm#7953's fix, and if so
+      re-verify and close #31 instead of just checking this box; or (b) the
+      same crash now reproduces on kitty or Ghostty too — that would mean
+      the trigger isn't WezTerm-specific after all, a new and more serious
+      bug.
 
 ## Ghostty
 
