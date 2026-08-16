@@ -89,36 +89,47 @@ T["build_transmit"]["action t (transmit-only) differs only in a="] = function()
   MiniTest.expect.equality(display_seq:gsub("a=T", "a=t"), transmit_seq)
 end
 
-T["build_transmit"]["combined transmit+placement carries the fixed placement id"] = function()
+T["build_transmit"]["combined transmit+placement carries the caller-supplied placement id"] = function()
   local png_bytes = "hi"
-  local sequences =
-    terminal.build_transmit(png_bytes, { id = ID, placement = { columns = 10, rows = 5 } })
+  local sequences = terminal.build_transmit(
+    png_bytes,
+    { id = ID, placement = { placement_id = 7, columns = 10, rows = 5 } }
+  )
   local payload = vim.base64.encode(png_bytes)
   local expected = ESC
     .. "_Ga=T,f=100,t=d,i="
     .. ID
-    .. ",q=2,p="
-    .. terminal.PLACEMENT_ID
-    .. ",c=10,r=5,m=0;"
+    .. ",q=2,p=7,c=10,r=5,m=0;"
     .. payload
     .. ESC
     .. "\\"
   MiniTest.expect.equality(sequences, { expected })
 end
 
+T["build_transmit"]["placement without a placement_id is rejected"] = function()
+  local ok = pcall(terminal.build_transmit, "hi", { id = ID, placement = { columns = 10 } })
+  MiniTest.expect.equality(ok, false)
+end
+
 T["build_transmit"]["combined transmit+placement carries crop keys before c=/r="] = function()
   local png_bytes = "hi"
   local sequences = terminal.build_transmit(png_bytes, {
     id = ID,
-    placement = { crop_x = 1, crop_y = 2, crop_w = 3, crop_h = 4, columns = 10, rows = 5 },
+    placement = {
+      placement_id = 1,
+      crop_x = 1,
+      crop_y = 2,
+      crop_w = 3,
+      crop_h = 4,
+      columns = 10,
+      rows = 5,
+    },
   })
   local payload = vim.base64.encode(png_bytes)
   local expected = ESC
     .. "_Ga=T,f=100,t=d,i="
     .. ID
-    .. ",q=2,p="
-    .. terminal.PLACEMENT_ID
-    .. ",x=1,y=2,w=3,h=4,c=10,r=5,m=0;"
+    .. ",q=2,p=1,x=1,y=2,w=3,h=4,c=10,r=5,m=0;"
     .. payload
     .. ESC
     .. "\\"
@@ -127,7 +138,7 @@ end
 
 T["build_transmit"]["deterministic across repeated calls"] = function()
   local png_bytes = "some bytes"
-  local opts = { id = ID, placement = { columns = 10, rows = 5 } }
+  local opts = { id = ID, placement = { placement_id = 1, columns = 10, rows = 5 } }
   local first = terminal.build_transmit(png_bytes, opts)
   local second = terminal.build_transmit(png_bytes, opts)
   MiniTest.expect.equality(first, second)
@@ -136,61 +147,56 @@ end
 T["build_placement"] = MiniTest.new_set()
 
 T["build_placement"]["minimal"] = function()
-  local seq = terminal.build_placement(ID)
-  MiniTest.expect.equality(
-    seq,
-    ESC .. "_Ga=p,i=" .. ID .. ",p=" .. terminal.PLACEMENT_ID .. ESC .. "\\"
-  )
+  local seq = terminal.build_placement(ID, { placement_id = 3 })
+  MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",p=3" .. ESC .. "\\")
+end
+
+T["build_placement"]["requires a positive integer placement_id"] = function()
+  local ok = pcall(terminal.build_placement, ID, {})
+  MiniTest.expect.equality(ok, false)
 end
 
 T["build_placement"]["with options in canonical order"] = function()
-  local seq =
-    terminal.build_placement(ID, { columns = 10, rows = 5, z_index = 3, no_move_cursor = true })
-  MiniTest.expect.equality(
-    seq,
-    ESC .. "_Ga=p,i=" .. ID .. ",p=" .. terminal.PLACEMENT_ID .. ",c=10,r=5,z=3,C=1" .. ESC .. "\\"
+  local seq = terminal.build_placement(
+    ID,
+    { placement_id = 3, columns = 10, rows = 5, z_index = 3, no_move_cursor = true }
   )
+  MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",p=3,c=10,r=5,z=3,C=1" .. ESC .. "\\")
 end
 
 T["build_placement"]["source-rect crop keys precede target cell box, in fixed order"] = function()
   local seq = terminal.build_placement(
     ID,
-    { crop_x = 5, crop_y = 10, crop_w = 20, crop_h = 30, columns = 4, rows = 6 }
+    { placement_id = 3, crop_x = 5, crop_y = 10, crop_w = 20, crop_h = 30, columns = 4, rows = 6 }
   )
   MiniTest.expect.equality(
     seq,
-    ESC
-      .. "_Ga=p,i="
-      .. ID
-      .. ",p="
-      .. terminal.PLACEMENT_ID
-      .. ",x=5,y=10,w=20,h=30,c=4,r=6"
-      .. ESC
-      .. "\\"
+    ESC .. "_Ga=p,i=" .. ID .. ",p=3,x=5,y=10,w=20,h=30,c=4,r=6" .. ESC .. "\\"
   )
 end
 
 T["build_placement"]["crop_x/crop_y of 0 are emitted, not treated as absent"] = function()
-  local seq = terminal.build_placement(ID, { crop_x = 0, crop_y = 0, crop_w = 5, crop_h = 5 })
+  local seq = terminal.build_placement(
+    ID,
+    { placement_id = 3, crop_x = 0, crop_y = 0, crop_w = 5, crop_h = 5 }
+  )
   MiniTest.expect.equality(seq:find(",x=0,", 1, true) ~= nil, true)
   MiniTest.expect.equality(seq:find(",y=0,", 1, true) ~= nil, true)
 end
 
 T["build_placement"]["no crop keys when omitted, unchanged from existing placement bytes"] = function()
-  local seq = terminal.build_placement(ID, { columns = 10, rows = 5 })
+  local seq = terminal.build_placement(ID, { placement_id = 3, columns = 10, rows = 5 })
   MiniTest.expect.equality(seq:find(",x=", 1, true), nil)
   MiniTest.expect.equality(seq:find(",y=", 1, true), nil)
   MiniTest.expect.equality(seq:find(",w=", 1, true), nil)
   MiniTest.expect.equality(seq:find(",h=", 1, true), nil)
 end
 
-T["build_placement"]["always uses the same fixed placement id across calls"] = function()
-  local first = terminal.build_placement(ID, { columns = 10, rows = 5 })
-  local second = terminal.build_placement(ID, { columns = 12, rows = 6 })
-  local function placement_id(sequence)
-    return sequence:match(",p=(%d+),")
-  end
-  MiniTest.expect.equality(placement_id(first), placement_id(second))
+T["build_placement"]["a different placement_id on the same image id fans out (issue #10)"] = function()
+  local first = terminal.build_placement(ID, { placement_id = 1, columns = 10, rows = 5 })
+  local second = terminal.build_placement(ID, { placement_id = 2, columns = 10, rows = 5 })
+  MiniTest.expect.equality(first:find(",p=1,", 1, true) ~= nil, true)
+  MiniTest.expect.equality(second:find(",p=2,", 1, true) ~= nil, true)
 end
 
 T["build_delete"] = MiniTest.new_set()
@@ -205,8 +211,13 @@ T["build_delete"]["free_data uses d=I"] = function()
   MiniTest.expect.equality(seq, ESC .. "_Ga=d,d=I,i=" .. ID .. ESC .. "\\")
 end
 
+T["build_delete"]["placement_id scopes the delete to one placement (issue #10)"] = function()
+  local seq = terminal.build_delete(ID, { placement_id = 5 })
+  MiniTest.expect.equality(seq, ESC .. "_Ga=d,d=i,i=" .. ID .. ",p=5" .. ESC .. "\\")
+end
+
 T["build_delete"]["never emits delete-all"] = function()
-  for _, opts in ipairs({ nil, { free_data = true }, { free_data = false } }) do
+  for _, opts in ipairs({ nil, { free_data = true }, { free_data = false }, { placement_id = 5 } }) do
     local seq = terminal.build_delete(ID, opts)
     MiniTest.expect.equality(seq:find("d=a", 1, true), nil)
   end

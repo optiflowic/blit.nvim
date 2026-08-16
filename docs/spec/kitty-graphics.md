@@ -29,7 +29,7 @@ Every command is an APC (Application Program Command) escape sequence:
 | `i` | image id | one of blit's reserved range, see below |
 | `q` | quiet | `2` (suppress all responses) always, see "Response handling" below |
 | `m` | more chunks | `1` (more chunks follow) / `0` (last chunk) |
-| `p` | placement id | always `1` (blit's single fixed placement id — see "Placement" below) |
+| `p` | placement id | a per-handle id, distinct across every concurrently-live placement — see "Placement" below |
 | `c`, `r` | placement columns/rows | shrink to the visible cell span when a placement is partially clipped, see "Source-rectangle cropping" below |
 | `x`, `y` | source rectangle pixel offset (left/top) into the transmitted image | present only when a placement is partially clipped; see "Source-rectangle cropping" below |
 | `w`, `h` | source rectangle pixel size | present only when a placement is partially clipped; see "Source-rectangle cropping" below |
@@ -53,23 +53,34 @@ Every command is an APC (Application Program Command) escape sequence:
 
 ## Placement
 
-- `a=p,i=<id>,p=1` redisplays an already-transmitted image without resending
-  pixel data. This is how blit satisfies the performance rule that
-  scroll/resize redraws must reuse the existing id rather than
+- `a=p,i=<id>,p=<placement_id>` redisplays an already-transmitted image
+  without resending pixel data. This is how blit satisfies the performance
+  rule that scroll/resize redraws must reuse the existing id rather than
   re-transmitting.
-- `p=1` (blit's fixed placement id, `terminal.PLACEMENT_ID`) is **always**
-  sent, on every placement command — both the initial `a=T` transmit+display
-  and every later `a=p` reposition. If `p=` is omitted, the terminal creates
-  a brand-new placement on every call instead of moving the existing one;
-  since blit repositions on every debounced `WinScrolled`/`WinResized`
-  redraw, this silently accumulates stacked "ghost" placements at each prior
-  screen position — visible as partial/duplicated image fragments while
-  scrolling, until a `a=d,d=i` delete (see below) clears all of them at
-  once. Reusing the same `i=` **and** `p=` pair on every call makes each
-  `a=p` update that one placement in place instead. blit never needs more
-  than one placement id per image id: `renderer.lua`'s cache only ever marks
-  a given image id "active" for a single handle at a time, so a constant
-  `p=1` can never collide with a second live placement of the same id.
+- `p=` (a caller-supplied placement id, `blit.terminal.PlacementOpts.placement_id`
+  in `terminal.lua`) is **always** sent, on every placement command — both
+  the initial `a=T` transmit+display and every later `a=p` reposition. If
+  `p=` is omitted, the terminal creates a brand-new placement on every call
+  instead of moving the existing one; since blit repositions on every
+  debounced `WinScrolled`/`WinResized` redraw, this silently accumulates
+  stacked "ghost" placements at each prior screen position — visible as
+  partial/duplicated image fragments while scrolling, until a `a=d,d=i`
+  delete (see below) clears all of them at once. Reusing the same `i=`
+  **and** `p=` pair on every call makes each `a=p` update that one placement
+  in place instead.
+- **One image id can have several concurrent placements (issue #10,
+  "Multi-location placement fan-out").** Earlier versions of blit sent a
+  single fixed `p=1` on every call, relying on `renderer.lua`'s cache never
+  marking a given image id "active" for more than one handle at a time. That
+  constraint is gone: `renderer.lua` now allocates a distinct, never-reused
+  placement id per handle (`alloc_placement_id()`, an ever-incrementing
+  session-lifetime counter — see `docs/spec/renderer-placement.md`'s
+  "Transmission cache" section), so a second `show()` of the same
+  `(path, mtime)` while the first is still live reuses the SAME image id
+  under a DIFFERENT placement id — a second, independent placement — instead
+  of transmitting a redundant copy under a new image id. Each placement is
+  then addressed, repositioned, and torn down independently by its own
+  `(id, placement_id)` pair.
 - Optional placement keys, in the fixed order blit emits them: `p=` (always
   present when placing), `x=`, `y=`, `w=`, `h=` (source rectangle, only when
   cropped — see "Source-rectangle cropping" below), `c=`, `r=` (target cell
@@ -144,6 +155,17 @@ clip-amount math (`compute_clip`) and the pixel-space conversion
 
 - `a=d,d=i,i=<id>` deletes the visible placement(s) for one image id blit
   owns; `d=I` additionally frees the terminal's stored pixel data for that id.
+- `p=<placement_id>`, when supplied alongside `d=i`, restricts the delete to
+  that ONE placement of the id rather than every placement blit has made for
+  it — required now that one id can have several concurrent placements (see
+  "Placement" above). `renderer.lua` always includes it except for the
+  whole-id teardown case: freeing a handle's placement while the id might
+  still be shared by a sibling handle (`terminal.build_delete(id, {
+  placement_id = ... })`), vs. freeing the id's stored data entirely once no
+  handle references it anymore (`terminal.build_delete(id, { free_data =
+  true })`, no `p=`, since every placement is being torn down together at
+  that point anyway) — see `docs/spec/renderer-placement.md`'s Lifecycle
+  section for the full decision.
 - blit **never** emits `d=a` (delete every image on the terminal, including
   ones placed by other plugins like image.nvim/snacks.image). Every deletion
   path in `terminal.lua` is scoped to a single caller-supplied id.

@@ -35,19 +35,26 @@ overrides an intentional stretch/fit. One handle = one entry in
 z_index, visible, native_width, native_height }`, matching `AGENTS.md`'s
 "one image = one handle table" rule.
 
-**Known limitation**: a handle is bound to exactly one `win` at creation
-time, but the `virt_lines` extmark carrying its reserved blank rows is
-buffer-scoped, not window-scoped — Neovim renders those reserved rows in
-*every* window currently showing that buffer. If the same buffer is split
-into a second window (`:split`/`:vsplit`), the non-anchor window displays
-the reserved blank space with no image in it, for as long as it stays
-open — `compute_placement` only ever computes visibility/position against
-the one `handle.win` it was given. A real fix requires per-window
-placement-id fan-out (a distinct `p=` for each window showing the buffer),
-which conflicts with the one-handle-per-placement data model above and is
-already tracked separately (see "Transmission cache" below and issue #10,
-"Multi-location placement fan-out for a single transmitted image").
-Accepted for v0.x; revisit when #10 ships.
+**Known limitation, narrower since issue #10**: a handle is still bound to
+exactly one `win` at creation time, but the `virt_lines` extmark carrying
+its reserved blank rows is buffer-scoped, not window-scoped — Neovim
+renders those reserved rows in *every* window currently showing that
+buffer. If the same buffer is split into a second window
+(`:split`/`:vsplit`), the non-anchor window displays the reserved blank
+space with no image in it, for as long as it stays open —
+`compute_placement` only ever computes visibility/position against the one
+`handle.win` it was given. Issue #10 ("Multi-location placement fan-out for
+a single transmitted image") added the underlying primitive this needs — a
+distinct `p=` per placement, so the same transmitted image id can carry a
+second, independent placement without re-transmitting (see "Transmission
+cache" below) — but it does not by itself detect a `:split` and create that
+second placement automatically: `M.show()` still only ever creates one
+handle bound to one `win` per call. A caller can work around the split case
+today by calling `M.show()` a second time for the second window explicitly
+(same `path`, so the same `(path, mtime)` cache key) — that second call now
+fans out onto the first's image id instead of re-transmitting, per issue
+#10 — but automatic per-window fan-out for a single `show()` call remains
+unimplemented. Accepted for v0.x.
 
 ## Screen coordinate conversion
 
@@ -263,12 +270,15 @@ single write is transient and does not survive past that write.
 Deletion (`a=d`) is not screen-position-dependent, so no cursor bracketing is
 needed there.
 
-## Transmission cache: (path, mtime) keyed, no placement-id fan-out
+## Transmission cache: (path, mtime) keyed, with placement-id fan-out
 
 Cache key: `path .. ":" .. mtime.sec .. "." .. mtime.nsec` (from
-`vim.uv.fs_stat`). Each cache entry is a **list** of `{ id, active, lines,
-columns, native_width, native_height }` entries for that exact file content
-— a list, not a single entry, because:
+`vim.uv.fs_stat`). Each cache entry is a **list** of `{ id,
+active_placements, lines, columns, native_width, native_height }` entries
+for that exact file content — a list, not a single entry, because a given
+key can transiently have both an idle entry and a stale-but-still-active
+one (e.g. mid-Ghostty-resize-recovery, see below) even though the common
+case settles to exactly one entry per key:
 
 `native_width`/`native_height` (the PNG's native pixel dimensions, read once
 via `lua/blit/png.lua`'s IHDR reader when the file is actually read for
@@ -277,23 +287,41 @@ every handle that reuses the entry — a cache hit never re-reads or
 re-parses the file. These are used solely by `pixel_crop` (see "Visibility
 policy" above), never for auto-sizing.
 
-- `show()` on a cache hit with an **idle** (`active = false`) entry reuses
-  that id: no re-transmission, just an `a=p` placement (or nothing yet, if
-  not currently visible) — this is the AGENTS.md performance rule
+`active_placements` counts how many currently-live handles reference this
+entry's id — 0 means idle. `show()`'s `find_reusable_entry` tries an idle
+entry first (see the Ghostty exception below), and only if none exists
+falls back to any entry with `active_placements > 0`:
+
+- **Idle reuse**: no re-transmission, just an `a=p` placement (or nothing
+  yet, if not currently visible) — this is the AGENTS.md performance rule
   ("re-placement... must reuse its ID — never re-transmit").
-- `show()` on a cache hit where every existing entry is **active** (already
-  placed live somewhere else) transmits a fresh copy under a new id instead
-  of reusing/relocating the active one. blit does emit kitty's placement-id
-  key (`p=`, always `terminal.PLACEMENT_ID`, a fixed constant — see
-  `docs/spec/kitty-graphics.md`'s Placement section), but that fixed value
-  only prevents ghost placements when *repositioning* an id's one
-  placement; it is not a per-location identity. A given image id therefore
-  still has only one live placement at a time — reusing an active id for a
-  second simultaneous location would silently move the first location's
-  image instead of adding a second one. Supporting true multi-location
-  fan-out for one transmitted image (a distinct, allocated `p=` per
-  location) is deferred and is not needed for the common case (showing one
-  image once, or showing it again after it was cleared).
+- **Active reuse, i.e. fan-out (issue #10, "Multi-location placement
+  fan-out for a single transmitted image")**: also no re-transmission.
+  Earlier versions of blit always sent a single fixed placement id
+  (`terminal.PLACEMENT_ID = 1`) and therefore could give a given image id
+  only one live placement at a time — a second concurrent `show()` of the
+  same file had to transmit a redundant copy under a brand-new id. Every
+  real placement command now carries a distinct, caller-allocated
+  `placement_id` (`alloc_placement_id()`, defined right below "Placement id
+  allocation" — an ever-incrementing, never-reused, session-lifetime
+  counter, since placement ids only need to be unique within one image id,
+  not terminal-wide the way image ids do) — see `docs/spec/kitty-graphics.md`'s
+  Placement section — so a second `show()` of an already-active entry
+  instead adds a second, independent placement of the SAME id: `id`
+  unchanged, `entry.active_placements` incremented, a fresh
+  `handle.placement_id` allocated, and only an `a=p` (or nothing, if not yet
+  visible) written — matching the idle-reuse case exactly except that the
+  entry was never idle to begin with.
+
+`destroy_handle` (see "Lifecycle" below) is the inverse: it decrements
+`active_placements` and deletes only this handle's own placement
+(`a=d,d=i,i=<id>,p=<placement_id>`) — a sibling placement sharing the same
+id, if any, is untouched. The terminal-side pixel data itself is only ever
+freed (`d=I`, no `p=`) once `active_placements` reaches `0` **and** the
+caller's intent was to free it (`VimLeavePre`'s full teardown, or a fatal
+failure right after `M.show()` created the handle) — an everyday
+`clear()`/`clear_all()` never frees data even when it drops the count to
+`0`, keeping the entry idle-but-warm for a future `show()` instead.
 
 Cache entries are otherwise never evicted except at `VimLeavePre` (or the
 test-only `_reset()`) — an idle entry's id and terminal-side pixel data are
@@ -304,7 +332,9 @@ long session that `show()`s many distinct files; unbounded growth is
 accepted for v0.x (mirrors that memo's own acceptance of the range being
 merely "negligible collision risk", not infinite). `alloc_id()` returns
 `nil, err` if the range is exhausted; `show()` propagates that as a normal
-`nil, err_msg` failure.
+`nil, err_msg` failure. Placement ids draw from the full unsigned 32-bit
+`p=` space rather than a bounded pool (see "Placement id allocation" in
+`renderer.lua`), so they have no equivalent exhaustion case in practice.
 
 **Ghostty exception: idle entries recorded against a stale terminal size
 are evicted eagerly, at reuse time.** Ghostty discards previously-
@@ -315,7 +345,7 @@ all responses, `docs/spec/kitty-graphics.md`'s "Response handling"), and
 an id for a placement-only `a=p` then renders nothing (issue #24). Each
 cache entry therefore also records `vim.o.lines`/`vim.o.columns` (the whole
 Neovim grid size, which tracks the real terminal's size — not a per-window
-size) at the moment of transmission. `acquire_idle_entry` compares an idle
+size) at the moment of transmission. `find_reusable_entry` compares an idle
 entry's recorded size against the current size only when `caps.terminal ==
 "ghostty"`; a mismatch means a resize happened at some point since
 transmission, so the entry is treated as dead: its id is freed back to the
@@ -331,7 +361,7 @@ means a persistent autocmd outside the handle-gated `augroup` — directly
 conflicting with AGENTS.md's "no timers or autocmds active when zero
 images are displayed" performance rule. The size-comparison approach needs
 no autocmd at all: it only ever runs inside `show()`'s own
-`acquire_idle_entry` call. **Accepted false negative**: if the terminal is
+`find_reusable_entry` call. **Accepted false negative**: if the terminal is
 resized away and back to the *exact* original `lines`/`columns` before the
 next `show()`, the comparison can't tell that a resize happened in
 between, and a dead entry could still be handed out. This is deemed rare
@@ -352,7 +382,7 @@ restore it, since nothing in `redraw_all()`'s normal `a=p`/`a=d` toggling
 ever re-transmits. `redraw_all()` now checks, for each handle it finds
 visible, whether `caps.terminal == "ghostty"` and that handle's own cache
 entry's recorded `vim.o.lines`/`vim.o.columns` differs from the current
-values (the exact same signal `acquire_idle_entry` uses above, just read
+values (the exact same signal `find_reusable_entry` uses above, just read
 instead of also gating reuse — see `ghostty_entry_stale()` in
 `renderer.lua`).
 
@@ -363,9 +393,9 @@ this path beyond a naive "re-`a=T`, same id" attempt:
   will not restore a placement by re-`a=T`-ing under an id it already
   discarded the data for, even though the write itself reports success
   (`q=2` suppresses all responses, so blit has no way to detect this other
-  than the empirical result). `retransmit_and_place()` therefore frees the
-  stale id and hands the handle a *fresh* one via `alloc_id()`, exactly
-  mirroring how `acquire_idle_entry` above already treats a stale idle
+  than the empirical result). `retransmit_and_place_group()` therefore frees the
+  stale id and hands every handle sharing it a *fresh* one via `alloc_id()`,
+  exactly mirroring how `find_reusable_entry` above already treats a stale idle
   entry (free the old id, never reuse it) — it just also updates the
   now-live handle's `id` field and cache entry in place rather than
   waiting for a future `show()` call to do so.
@@ -397,7 +427,7 @@ number of retries of its own (issue #37).** `ghostty_retransmit_pass()` can
 find a handle still `ghostty_entry_stale()` after it runs even though no
 further `WinResized`/`WinScrolled` restarted the timer: `compute_placement()`
 can come back `nil` for that one tick (a real drag-resize's tail end can
-still race `vim.fn.screenpos()`), or `retransmit_and_place()`'s write itself
+still race `vim.fn.screenpos()`), or `retransmit_and_place_group()`'s write itself
 can fail (`write_all()` exhausting its bounded EAGAIN retries — see
 `terminal.lua`). Before this was fixed, either case left the placement
 blank until the user happened to trigger another resize purely by luck —
@@ -466,11 +496,17 @@ Two distinct kinds of state transition, kept separate:
 - **Destroy** (`BufWinLeave` for the specific `(buf, win)` pair,
   `WinClosed` for a closing window, `BufWipeout` for a wiped buffer,
   `M.clear()`/`M.clear_all()`, and `VimLeavePre`): removes the extmark,
-  removes the handle from `M._handles`, marks its cache entry idle, and
-  deletes its terminal-side placement. Only `VimLeavePre` (and
-  `M.clear`/`M.clear_all`'s eventual full-teardown path) also frees the
-  id back to the pool and the terminal's stored pixel data
-  (`d=I`) — everyday `clear()` keeps the cache warm.
+  removes the handle from `M._handles`, decrements its cache entry's
+  `active_placements`, and deletes only THIS handle's own placement
+  (`a=d,d=i,i=<id>,p=<placement_id>`) — never the whole id, since a fan-out
+  sibling (issue #10) may still hold a live placement on it. Only once
+  `active_placements` reaches `0` **and** the caller's intent was to free
+  data (`VimLeavePre`'s full teardown, or a fatal failure right after
+  `M.show()` created the handle) does `destroy_handle` also free the id back
+  to the pool and the terminal's stored pixel data (`d=I`, no `p=`, since
+  every placement sharing the id is gone by then) — everyday `clear()` never
+  frees data, keeping the entry idle-but-warm instead, regardless of
+  whether it just dropped to `0`.
 
   **`a=d` is retried a bounded number of times after destroy too, not just
   on the redraw path above.** Unlike a still-tracked invisible handle, a
@@ -478,21 +514,27 @@ Two distinct kinds of state transition, kept separate:
   WezTerm drops, there is no future `redraw_all()` pass left that would ever
   revisit it, and no guarantee a `WinScrolled`/`WinResized` event even fires
   again afterward to trigger one (issue #27; the repro is `clear_all()`
-  followed by *no* further input at all). `destroy_handle`'s `free_data =
-  false` path (the everyday teardown reasons above, not `VimLeavePre`)
-  therefore queues its id onto a small self-scheduled retry list
-  (`DESTROY_DELETE_RETRIES`, currently 3 extra attempts) that rides the same
-  debounce timer as `redraw_all`, resending a plain `a=d` each pass until
-  the budget runs out. Bounded, unlike the redraw path's resend-indefinitely
-  behavior, so a terminal that never honors the delete can't keep the
-  debounce timer (and therefore the "fully quiescent idle" guarantee) alive
-  forever. `VimLeavePre`'s `free_data = true` path is excluded: it frees the
-  id immediately, and Neovim is exiting right after, so a queued retry has
-  nothing meaningful left to protect and only risks racing a reused id
-  against a process that's already gone. If `acquire_idle_entry` reclaims a
-  still-queued id for a fresh placement before its retries are spent, the
-  queued entry is cancelled — otherwise a late retry could send `a=d` for an
-  id a brand new placement now legitimately owns.
+  followed by *no* further input at all). `destroy_handle`'s everyday-
+  teardown path (any call where the caller didn't request a full free, or
+  did but a fan-out sibling still shares the id — see above) therefore
+  queues its `(id, placement_id)` pair onto a small self-scheduled retry
+  list (`DESTROY_DELETE_RETRIES`, currently 3 extra attempts) that rides the
+  same debounce timer as `redraw_all`, resending the same scoped `a=d` each
+  pass until the budget runs out. Bounded, unlike the redraw path's resend-
+  indefinitely behavior, so a terminal that never honors the delete can't
+  keep the debounce timer (and therefore the "fully quiescent idle"
+  guarantee) alive forever. The full-free branch (id actually freed) is
+  excluded from queuing: for `VimLeavePre` specifically, Neovim is exiting
+  right after, so a queued retry has nothing meaningful left to protect and
+  only risks racing a reused id against a process that's already gone; for
+  a fatal `M.show()` failure, nothing else references the brand-new id
+  either. If `find_reusable_entry` reclaims a still-queued id for a fresh
+  placement before its retries are spent, the queued entries for that id
+  are cancelled (`cancel_pending_delete`) — though even without that, a late
+  retry naming the OLD `placement_id` could never hit the new placement's
+  DIFFERENT one, since placement ids are never reused (see "Placement id
+  allocation" in `renderer.lua`); the cancellation is belt-and-suspenders
+  against wasted escape-sequence bytes, not a correctness requirement.
 
 All autocmds live in one `augroup("blit", { clear = true })`; all extmarks in
 one `nvim_create_namespace("blit")`, both created lazily on first `show()`

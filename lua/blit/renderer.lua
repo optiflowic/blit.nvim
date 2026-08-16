@@ -27,6 +27,10 @@ local NAMESPACE = "blit"
 
 ---@class blit.Handle
 ---@field id integer kitty image id (blit's reserved range)
+---@field placement_id integer this handle's own kitty placement id (`p=`);
+---never reused across handles within a session, so several handles can
+---share one image {id} — each with its own live placement — without ever
+---colliding (issue #10). See docs/spec/kitty-graphics.md's Placement section.
 ---@field buf integer
 ---@field win integer
 ---@field extmark_id integer
@@ -94,9 +98,29 @@ local function free_id(id)
   used_ids[id] = nil
 end
 
+-- Placement id allocation ------------------------------------------------------
+-- Unlike image ids, placement ids only need to be unique within one image
+-- id, not terminal-wide — so a single ever-incrementing counter (never
+-- freed/reused, unlike alloc_id's bounded pool) is sufficient: at any
+-- realistic show()/clear() rate this session-lifetime counter would take
+-- centuries to approach the 32-bit `p=` value space. Never reusing a
+-- placement id number is also what makes a stray delayed retry from
+-- destroy_handle's retry queue (see "Destroy-path delete retry queue"
+-- below) provably harmless without needing its own cancellation bookkeeping
+-- — it can never coincide with a later, still-live placement.
+
+local next_placement_id = 1
+
+---@return integer
+local function alloc_placement_id()
+  local pid = next_placement_id
+  next_placement_id = next_placement_id + 1
+  return pid
+end
+
 -- Transmission cache ----------------------------------------------------------
 
----@type table<string, { id: integer, active: boolean, lines: integer, columns: integer, native_width: integer, native_height: integer }[]>
+---@type table<string, { id: integer, active_placements: integer, lines: integer, columns: integer, native_width: integer, native_height: integer }[]>
 local cache = {}
 
 ---@param path string
@@ -114,7 +138,7 @@ M.cache_key = cache_key
 -- silently renders nothing (issue #24). Each cache entry therefore records
 -- the Neovim grid size (`vim.o.lines`/`vim.o.columns`, which tracks the
 -- real terminal's size, not just a per-window size) at transmit time;
--- acquire_idle_entry rejects (and frees) an idle entry recorded against a
+-- find_reusable_entry rejects (and frees) an idle entry recorded against a
 -- stale size on Ghostty, forcing a fresh transmit instead of trusting dead
 -- data. This is a lazy, reuse-time check rather than a `VimResized`
 -- listener specifically to avoid needing a persistent autocmd outside the
@@ -125,13 +149,13 @@ M.cache_key = cache_key
 --
 -- The same size-mismatch signal also drives redraw_all's still-visible-
 -- handle path below (issue #34): a handle that stays active/displayed
--- across a Ghostty resize is not touched by acquire_idle_entry at all (it's
+-- across a Ghostty resize is not touched by find_reusable_entry at all (it's
 -- never idle), so without this it stayed permanently blank once its data
 -- was discarded — see "Redraw" below and
 -- docs/spec/renderer-placement.md's Transmission cache section.
 --
 -- This one fact — which terminal actually has this quirk — is centralized
--- here rather than compared inline at each call site, so acquire_idle_entry,
+-- here rather than compared inline at each call site, so find_reusable_entry,
 -- redraw_all's stale check, and its resize-race redraw guard all agree on
 -- the same definition as more terminals/quirks are added over time.
 ---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
@@ -155,23 +179,45 @@ end
 
 local DESTROY_DELETE_RETRIES = 3
 
----@type { id: integer, retries: integer }[]
+---@type { id: integer, placement_id: integer, retries: integer }[]
 local pending_deletes = {}
 
+-- Removes every still-pending retry for {id}, regardless of which
+-- placement_id each was queued for. Reused-id-only reasoning, kept as
+-- belt-and-suspenders even though placement ids are never reused (see
+-- "Placement id allocation" above, which already makes a stray retry
+-- harmless on its own): avoids wasting escape-sequence bytes resending
+-- deletes for placements this reuse has nothing to do with.
 ---@param id integer
 local function cancel_pending_delete(id)
-  for i, pending in ipairs(pending_deletes) do
-    if pending.id == id then
+  local i = 1
+  while i <= #pending_deletes do
+    if pending_deletes[i].id == id then
       table.remove(pending_deletes, i)
-      return
+    else
+      i = i + 1
     end
   end
 end
 
+-- Finds an existing cache entry this key's next show() can reuse instead of
+-- transmitting fresh pixel data — either an IDLE entry (no handle currently
+-- references its id) or, failing that, an ACTIVE one to fan out onto (issue
+-- #10: a second, independent placement of the same id, via a fresh
+-- placement id — no re-transmission needed). Idle entries are preferred
+-- first only because that's also the only branch that needs the Ghostty
+-- staleness check below: an idle entry has no live handle whose own
+-- redraw-pass check (`ghostty_entry_stale`, see "Redraw" below) would ever
+-- notice/self-heal a stale one, so staleness has to be caught here, at
+-- reuse time, instead. An active entry always has at least one live handle
+-- already doing that self-healing check every redraw pass, so reusing it
+-- for fan-out even while transiently stale is safe — the settle timer will
+-- catch up every placement sharing that id together (see
+-- "retransmit_and_place_group" below).
 ---@param key string
 ---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
----@return { id: integer, active: boolean, lines: integer, columns: integer, native_width: integer, native_height: integer }?
-local function acquire_idle_entry(key, terminal_name)
+---@return { id: integer, active_placements: integer, lines: integer, columns: integer, native_width: integer, native_height: integer }?
+local function find_reusable_entry(key, terminal_name)
   local entries = cache[key]
   if not entries then
     return nil
@@ -179,7 +225,7 @@ local function acquire_idle_entry(key, terminal_name)
   local i = 1
   while i <= #entries do
     local entry = entries[i]
-    if entry.active then
+    if entry.active_placements > 0 then
       i = i + 1
     elseif
       discards_pixels_on_resize(terminal_name)
@@ -188,12 +234,15 @@ local function acquire_idle_entry(key, terminal_name)
       free_id(entry.id)
       table.remove(entries, i)
     else
-      entry.active = true
-      -- The id may still have a bounded delete retry outstanding from a
+      -- The id may still have bounded delete retries outstanding from a
       -- prior destroy (see "Destroy-path delete retry queue" above); this
-      -- reuse legitimately reclaims it, so a late retry must not delete the
-      -- placement being made here.
+      -- reuse legitimately reclaims it.
       cancel_pending_delete(entry.id)
+      return entry
+    end
+  end
+  for _, entry in ipairs(entries) do
+    if entry.active_placements > 0 then
       return entry
     end
   end
@@ -208,7 +257,7 @@ local function register_cache_entry(key, id, native_width, native_height)
   cache[key] = cache[key] or {}
   table.insert(cache[key], {
     id = id,
-    active = true,
+    active_placements = 1,
     lines = vim.o.lines,
     columns = vim.o.columns,
     native_width = native_width,
@@ -218,7 +267,7 @@ end
 
 ---@param key string
 ---@param id integer
----@return { id: integer, active: boolean, lines: integer, columns: integer, native_width: integer, native_height: integer }?
+---@return { id: integer, active_placements: integer, lines: integer, columns: integer, native_width: integer, native_height: integer }?
 local function find_cache_entry(key, id)
   local entries = cache[key]
   if not entries then
@@ -230,21 +279,6 @@ local function find_cache_entry(key, id)
     end
   end
   return nil
-end
-
----@param key string
----@param id integer
-local function mark_cache_entry_idle(key, id)
-  local entries = cache[key]
-  if not entries then
-    return
-  end
-  for _, entry in ipairs(entries) do
-    if entry.id == id then
-      entry.active = false
-      return
-    end
-  end
 end
 
 ---@param key string
@@ -548,6 +582,7 @@ end
 ---@return blit.terminal.PlacementOpts
 local function placement_opts(handle, placement)
   return {
+    placement_id = handle.placement_id,
     columns = placement.cols,
     rows = placement.rows,
     z_index = handle.z_index,
@@ -575,14 +610,18 @@ local function place_existing(handle, placement)
   return ok, err
 end
 
+-- Scoped to this handle's own placement_id — with multi-location fan-out
+-- (issue #10) an image id can have several concurrent placements, so an
+-- unscoped `a=d,d=i,i=<id>` would wipe out every sibling placement sharing
+-- this id, not just this handle's own.
 ---@param handle blit.Handle
 local function hide_existing(handle)
-  M._write_fn({ terminal.build_delete(handle.id) })
+  M._write_fn({ terminal.build_delete(handle.id, { placement_id = handle.placement_id }) })
   handle.visible = false
 end
 
 -- On Ghostty, a still-visible handle's transmitted data can have been
--- silently discarded by the same real terminal resize acquire_idle_entry
+-- silently discarded by the same real terminal resize find_reusable_entry
 -- guards against for idle entries (issue #24/#34) — see the "Transmission
 -- cache" comment above. There is no response to detect this by, so the
 -- only signal available is the same one: the handle's cache entry was
@@ -601,60 +640,133 @@ local function ghostty_entry_stale(handle, terminal_name)
   return entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns
 end
 
--- Re-transmits a still-visible handle's pixel data under a *fresh* id and
--- updates the handle/cache to point at it, freeing the old, now-dead one —
--- confirmed via manual testing on a real Ghostty resize (issue #34) that
--- simply re-`a=T`-ing under the SAME id Ghostty already discarded does NOT
--- bring the placement back, even though the write itself reports success
--- (`q=2` suppresses all responses, so blit has no way to detect this other
--- than the empirical result). This mirrors `acquire_idle_entry`'s existing
--- Ghostty eviction above exactly: that path never reuses a stale id either —
--- it frees it and lets a fresh `alloc_id()` hand out a new one on the next
--- transmit. This is the one place outside `M.show()` that transmits rather
--- than reusing `a=p` — see AGENTS.md's performance rule on reuse-over-
--- retransmit for why that's normally forbidden and the narrow, Ghostty-only
--- exception carved out here.
----@param handle blit.Handle
----@param placement blit.PlacementResult
+---@param id integer
+---@return blit.Handle[]
+local function handles_with_id(id)
+  local out = {}
+  for _, h in ipairs(M._handles) do
+    if h.id == id then
+      out[#out + 1] = h
+    end
+  end
+  return out
+end
+
+-- Re-transmits a stale id's pixel data under a *fresh* id and migrates
+-- EVERY handle currently sharing it (issue #10 fan-out means a stale id can
+-- have several live placements, not just one), freeing the old, now-dead id
+-- once every one of them has moved off it — confirmed via manual testing on
+-- a real Ghostty resize (issue #34) that simply re-`a=T`-ing under the SAME
+-- id Ghostty already discarded does NOT bring the placement back, even
+-- though the write itself reports success (`q=2` suppresses all responses,
+-- so blit has no way to detect this other than the empirical result). This
+-- mirrors `find_reusable_entry`'s existing Ghostty eviction above exactly:
+-- that path never reuses a stale id either — it frees it and lets a fresh
+-- `alloc_id()` hand out a new one on the next transmit. This is the one
+-- place outside `M.show()` that transmits rather than reusing `a=p` — see
+-- AGENTS.md's performance rule on reuse-over-retransmit for why that's
+-- normally forbidden and the narrow, Ghostty-only exception carved out
+-- here.
+--
+-- Migrating the group atomically (one delete+transmit for the shared id,
+-- not one per handle) matters for correctness, not just efficiency: freeing
+-- the old id's cache entry after only the FIRST sharing handle's retransmit
+-- would leave every other handle still pointing at an id whose cache entry
+-- (and therefore `ghostty_entry_stale`'s only signal) has already vanished
+-- — they would never be recognized as needing a retry again, and this
+-- pass's own `still_stale` bookkeeping would silently miss them too.
+-- Handles with no current placement (scrolled off, wrong tab, etc.) are
+-- still migrated to the new id — so a later redraw pass places them
+-- correctly once they become visible again — but only the ones WITH a
+-- current placement need an actual `a=p`/`a=T` written now; one of them
+-- (`display_handle`) carries the transmit itself, the rest just add a
+-- placement (`a=p`) against the data it just sent.
+---@param handles blit.Handle[] every handle currently sharing one stale id
 ---@return boolean ok
-local function retransmit_and_place(handle, placement)
-  local bytes = read_file(handle.path)
+local function retransmit_and_place_group(handles)
+  local first = handles[1]
+  local old_id = first.id
+
+  local bytes = read_file(first.path)
   if not bytes then
-    hide_existing(handle)
+    for _, h in ipairs(handles) do
+      hide_existing(h)
+    end
     return false
   end
 
   local new_id = alloc_id()
   if not new_id then
-    hide_existing(handle)
+    for _, h in ipairs(handles) do
+      hide_existing(h)
+    end
     return false
   end
 
-  local old_id = handle.id
-  local sequences = {
-    terminal.build_delete(old_id, { free_data = true }),
-    terminal.build_save_cursor(),
-    terminal.build_move_cursor(placement.screen_row, placement.screen_col),
-  }
-  vim.list_extend(
-    sequences,
-    terminal.build_transmit(
-      bytes,
-      { id = new_id, action = "T", placement = placement_opts(handle, placement) }
+  ---@type table<blit.Handle, blit.PlacementResult?>
+  local placements = {}
+  local display_handle = nil
+  for _, h in ipairs(handles) do
+    placements[h] = compute_placement(h)
+    if placements[h] and not display_handle then
+      display_handle = h
+    end
+  end
+
+  local sequences = { terminal.build_delete(old_id, { free_data = true }) }
+
+  if display_handle then
+    vim.list_extend(sequences, {
+      terminal.build_save_cursor(),
+      terminal.build_move_cursor(
+        placements[display_handle].screen_row,
+        placements[display_handle].screen_col
+      ),
+    })
+    vim.list_extend(
+      sequences,
+      terminal.build_transmit(bytes, {
+        id = new_id,
+        action = "T",
+        placement = placement_opts(display_handle, placements[display_handle]),
+      })
     )
-  )
-  table.insert(sequences, terminal.build_restore_cursor())
+    table.insert(sequences, terminal.build_restore_cursor())
+  else
+    -- No handle sharing this id is currently visible; keep the data ready
+    -- (transmit-only) so whichever handle becomes visible next places
+    -- correctly against the new id without needing its own re-transmit.
+    vim.list_extend(sequences, terminal.build_transmit(bytes, { id = new_id, action = "t" }))
+  end
+
+  for _, h in ipairs(handles) do
+    if h ~= display_handle and placements[h] then
+      vim.list_extend(sequences, {
+        terminal.build_save_cursor(),
+        terminal.build_move_cursor(placements[h].screen_row, placements[h].screen_col),
+        terminal.build_placement(new_id, placement_opts(h, placements[h])),
+        terminal.build_restore_cursor(),
+      })
+    end
+  end
 
   local ok = M._write_fn(sequences)
   if ok then
-    handle.id = new_id
-    drop_cache_entry(handle.cache_key, old_id)
+    drop_cache_entry(first.cache_key, old_id)
     free_id(old_id)
-    register_cache_entry(handle.cache_key, new_id, handle.native_width, handle.native_height)
+    register_cache_entry(first.cache_key, new_id, first.native_width, first.native_height)
+    local new_entry = find_cache_entry(first.cache_key, new_id)
+    new_entry.active_placements = #handles
+    for _, h in ipairs(handles) do
+      h.id = new_id
+      h.visible = placements[h] ~= nil
+    end
   else
     free_id(new_id)
+    for _, h in ipairs(handles) do
+      h.visible = false
+    end
   end
-  handle.visible = ok and true or false
   return ok
 end
 
@@ -699,8 +811,9 @@ local function arm_ghostty_retransmit_timer()
 end
 
 -- A handle can still be `ghostty_entry_stale()` after this pass runs:
--- `retransmit_and_place()` itself can fail (e.g. `write_all()` exhausted its
--- bounded EAGAIN retries), or `compute_placement()` can come back `nil` for
+-- `retransmit_and_place_group()` itself can fail (e.g. `write_all()`
+-- exhausted its bounded EAGAIN retries), or `compute_placement()` can come
+-- back `nil` for
 -- this one settle-timer tick even though the handle's cache entry is still
 -- stale — a real drag-resize's tail end can still race `vim.fn.screenpos()`
 -- (see its pcall guard in `compute_placement`) at the exact moment the
@@ -726,10 +839,32 @@ local ghostty_retransmit_retries_left = GHOSTTY_RETRANSMIT_RETRIES
 ghostty_retransmit_pass = function()
   local caps = M._detect_fn()
   local still_stale = false
+  -- One id can now have several sharing handles (fan-out); process each
+  -- stale id's whole group together via retransmit_and_place_group rather
+  -- than per-handle, and only once per id per pass.
+  local processed_ids = {}
   for _, handle in ipairs(M._handles) do
-    if ghostty_entry_stale(handle, caps.terminal) then
-      local placement = compute_placement(handle)
-      if not (placement and retransmit_and_place(handle, placement)) then
+    if not processed_ids[handle.id] and ghostty_entry_stale(handle, caps.terminal) then
+      processed_ids[handle.id] = true
+      local group = handles_with_id(handle.id)
+      local any_visible = false
+      for _, h in ipairs(group) do
+        if compute_placement(h) then
+          any_visible = true
+          break
+        end
+      end
+      if any_visible then
+        if not retransmit_and_place_group(group) then
+          still_stale = true
+        end
+      else
+        -- Mirrors the single-handle behavior this replaces: a stale group
+        -- with nothing currently visible is left alone rather than
+        -- transmitted speculatively, but still counts as "still stale" so
+        -- the bounded retry budget keeps checking back in case a
+        -- momentary screenpos() race (not genuine long-term invisibility)
+        -- clears up within the next pass or two.
         still_stale = true
       end
     end
@@ -807,7 +942,9 @@ local function redraw_all()
   if #pending_deletes > 0 then
     local still_pending = {}
     for _, pending in ipairs(pending_deletes) do
-      M._write_fn({ terminal.build_delete(pending.id) })
+      M._write_fn({
+        terminal.build_delete(pending.id, { placement_id = pending.placement_id }),
+      })
       pending.retries = pending.retries - 1
       if pending.retries > 0 then
         table.insert(still_pending, pending)
@@ -830,10 +967,23 @@ end
 
 -- Lifecycle: destroy ------------------------------------------------------
 
+-- Whether it's safe to fully free {handle}'s id (terminal-side pixel data
+-- + the id itself) depends on whether any OTHER handle still shares it via
+-- fan-out (issue #10), not just on the caller's free_data intent: freeing
+-- data out from under a sibling placement that still needs it would blank
+-- it. free_data therefore only ever triggers the full free once THIS
+-- handle is the last one referencing the id (`remaining <= 0`); otherwise
+-- only this handle's own placement is torn down (`d=i,p=<placement_id>`,
+-- data untouched) and the id/cache entry are left alone for whichever
+-- handle(s) still use it. Since VimLeavePre destroys every handle in one
+-- pass, the LAST handle sharing an id to be destroyed always ends up taking
+-- the full-free branch, so the id and its data are still guaranteed to be
+-- fully released by the time VimLeavePre finishes — it just may not be
+-- THIS particular call that does it.
 ---@param handle blit.Handle
 ---@param opts? { free_data?: boolean }
 local function destroy_handle(handle, opts)
-  local free_data = (opts and opts.free_data) or false
+  local free_data_requested = (opts and opts.free_data) or false
 
   if vim.api.nvim_buf_is_valid(handle.buf) then
     pcall(vim.api.nvim_buf_del_extmark, handle.buf, ensure_namespace(), handle.extmark_id)
@@ -846,24 +996,47 @@ local function destroy_handle(handle, opts)
     end
   end
 
-  M._write_fn({ terminal.build_delete(handle.id, { free_data = free_data }) })
+  local entry = find_cache_entry(handle.cache_key, handle.id)
+  local remaining = entry and math.max(0, entry.active_placements - 1) or 0
+  if entry then
+    entry.active_placements = remaining
+  end
 
-  if free_data then
+  if free_data_requested and remaining <= 0 then
+    M._write_fn({ terminal.build_delete(handle.id, { free_data = true }) })
     free_id(handle.id)
     drop_cache_entry(handle.cache_key, handle.id)
-  else
-    mark_cache_entry_idle(handle.cache_key, handle.id)
-    -- Only the free_data=false path (clear()/clear_all(), BufWinLeave,
-    -- WinClosed, BufWipeout) gets a retry: its id stays reserved and its
-    -- cache entry stays around for reuse, so a late retry always still
-    -- refers to either this same dead placement or nothing (cancelled via
-    -- cancel_pending_delete if acquire_idle_entry reclaims the id first).
-    -- VimLeavePre's free_data=true call frees the id immediately, so a
-    -- queued retry there could race a reused id after Neovim exits/the
-    -- process is gone anyway — not worth the risk for a shutdown path.
-    table.insert(pending_deletes, { id = handle.id, retries = DESTROY_DELETE_RETRIES })
-    schedule_redraw()
+    return
   end
+
+  M._write_fn({ terminal.build_delete(handle.id, { placement_id = handle.placement_id }) })
+
+  if free_data_requested then
+    -- A sibling placement still shares this id; VimLeavePre's own remaining
+    -- iterations will eventually take the full-free branch above once the
+    -- last one goes. No retry queued here, matching the exclusion below:
+    -- Neovim is exiting right after, so a queued retry has nothing
+    -- meaningful left to protect.
+    return
+  end
+
+  -- Everyday teardown (clear()/clear_all(), BufWinLeave, WinClosed,
+  -- BufWipeout) never frees data: the id's cache entry stays around —
+  -- idle if this was the last handle sharing it, still active otherwise —
+  -- so a later show() of the same file (or a sibling fan-out placement)
+  -- stays cheap. A late retry always still refers to either this same dead
+  -- placement or nothing (cancelled via cancel_pending_delete if
+  -- find_reusable_entry reclaims the id first); it can never hit a
+  -- DIFFERENT live placement, since placement ids are never reused (see
+  -- "Placement id allocation" above). VimLeavePre's free_data=true path is
+  -- excluded above for the same reason as the full-free branch: the
+  -- process is exiting right after.
+  table.insert(pending_deletes, {
+    id = handle.id,
+    placement_id = handle.placement_id,
+    retries = DESTROY_DELETE_RETRIES,
+  })
+  schedule_redraw()
 end
 
 local autocmds_ready = false
@@ -1101,7 +1274,10 @@ function M.show(path, opts)
   debounce_ms = opts.debounce_ms or debounce_ms
 
   local key = cache_key(path, stat.mtime)
-  local entry = acquire_idle_entry(key, caps.terminal)
+  -- Either an idle entry (ordinary re-show of a cleared handle) or an
+  -- active one (issue #10 fan-out: a second, concurrent placement of the
+  -- same already-live id) — either way, no re-transmission needed.
+  local entry = find_reusable_entry(key, caps.terminal)
 
   local id, bytes, needs_transmit, native_width, native_height
   if entry then
@@ -1109,6 +1285,7 @@ function M.show(path, opts)
     native_width = entry.native_width
     native_height = entry.native_height
     needs_transmit = false
+    entry.active_placements = entry.active_placements + 1
   else
     local read_err
     bytes, read_err = read_file(path)
@@ -1150,6 +1327,7 @@ function M.show(path, opts)
   ---@type blit.Handle
   local handle = {
     id = id,
+    placement_id = alloc_placement_id(),
     buf = buf,
     win = win,
     extmark_id = extmark_id,
@@ -1246,6 +1424,7 @@ function M._reset()
   cache = {}
   used_ids = {}
   next_id = terminal.ID_RANGE_START
+  next_placement_id = 1
   M._write_fn = function(sequences)
     return terminal.write(sequences)
   end
