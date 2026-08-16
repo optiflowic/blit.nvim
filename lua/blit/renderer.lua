@@ -980,10 +980,20 @@ end
 -- the full-free branch, so the id and its data are still guaranteed to be
 -- fully released by the time VimLeavePre finishes — it just may not be
 -- THIS particular call that does it.
+--
+-- `shutting_down` is a separate axis from `free_data`: it's only true for
+-- the true end-of-session call sites (`VimLeavePre`, the test-only
+-- `_reset()`), where skipping the destroy-path delete retry queue below is
+-- safe because nothing is left running to revisit a dropped delete anyway.
+-- A `free_data = true, shutting_down = false` call (M.show()'s own failure
+-- paths tearing down a fan-out handle whose sibling is still live) keeps
+-- the retry: the process keeps running and no future redraw pass will ever
+-- revisit this specific (id, placement_id) again once the handle is gone.
 ---@param handle blit.Handle
----@param opts? { free_data?: boolean }
+---@param opts? { free_data?: boolean, shutting_down?: boolean }
 local function destroy_handle(handle, opts)
   local free_data_requested = (opts and opts.free_data) or false
+  local shutting_down = (opts and opts.shutting_down) or false
 
   if vim.api.nvim_buf_is_valid(handle.buf) then
     pcall(vim.api.nvim_buf_del_extmark, handle.buf, ensure_namespace(), handle.extmark_id)
@@ -1011,26 +1021,33 @@ local function destroy_handle(handle, opts)
 
   M._write_fn({ terminal.build_delete(handle.id, { placement_id = handle.placement_id }) })
 
-  if free_data_requested then
+  if free_data_requested and shutting_down then
     -- A sibling placement still shares this id; VimLeavePre's own remaining
     -- iterations will eventually take the full-free branch above once the
-    -- last one goes. No retry queued here, matching the exclusion below:
-    -- Neovim is exiting right after, so a queued retry has nothing
-    -- meaningful left to protect.
+    -- last one goes. No retry queued here: Neovim is exiting right after,
+    -- so a queued retry has nothing meaningful left to protect. This is
+    -- distinct from the free_data_requested-but-not-shutting_down case
+    -- below (a fatal M.show() failure tearing down a fan-out handle mid-
+    -- session) — there, the process keeps running and no future redraw
+    -- pass will ever revisit this specific (id, placement_id) again, so a
+    -- dropped delete would otherwise orphan the placement for as long as
+    -- the sibling stays alive (issue #10).
     return
   end
 
   -- Everyday teardown (clear()/clear_all(), BufWinLeave, WinClosed,
-  -- BufWipeout) never frees data: the id's cache entry stays around —
-  -- idle if this was the last handle sharing it, still active otherwise —
-  -- so a later show() of the same file (or a sibling fan-out placement)
-  -- stays cheap. A late retry always still refers to either this same dead
-  -- placement or nothing (cancelled via cancel_pending_delete if
-  -- find_reusable_entry reclaims the id first); it can never hit a
-  -- DIFFERENT live placement, since placement ids are never reused (see
-  -- "Placement id allocation" above). VimLeavePre's free_data=true path is
-  -- excluded above for the same reason as the full-free branch: the
-  -- process is exiting right after.
+  -- BufWipeout, or a fatal M.show() failure on a fan-out handle whose
+  -- sibling is still live) never frees data here: the id's cache entry
+  -- stays around — idle if this was the last handle sharing it, still
+  -- active otherwise — so a later show() of the same file (or a sibling
+  -- fan-out placement) stays cheap. A late retry always still refers to
+  -- either this same dead placement or nothing (cancelled via
+  -- cancel_pending_delete if find_reusable_entry reclaims the id first); it
+  -- can never hit a DIFFERENT live placement, since placement ids are never
+  -- reused (see "Placement id allocation" above). Only the true-shutdown
+  -- case above (VimLeavePre, `_reset()`) is excluded from queuing: the
+  -- process/test run is ending right after, so a queued retry has nothing
+  -- meaningful left to protect.
   table.insert(pending_deletes, {
     id = handle.id,
     placement_id = handle.placement_id,
@@ -1093,7 +1110,7 @@ end
 local function on_vim_leave_pre()
   local handles = vim.list_extend({}, M._handles)
   for _, handle in ipairs(handles) do
-    destroy_handle(handle, { free_data = true })
+    destroy_handle(handle, { free_data = true, shutting_down = true })
   end
   maybe_teardown_autocmds()
   terminal.reset_writer()
@@ -1412,7 +1429,7 @@ end
 function M._reset()
   local handles = vim.list_extend({}, M._handles)
   for _, handle in ipairs(handles) do
-    destroy_handle(handle, { free_data = true })
+    destroy_handle(handle, { free_data = true, shutting_down = true })
   end
   M._handles = {}
   -- Discard any still-outstanding destroy-path retries (see "Destroy-path

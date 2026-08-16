@@ -524,11 +524,18 @@ Two distinct kinds of state transition, kept separate:
   indefinitely behavior, so a terminal that never honors the delete can't
   keep the debounce timer (and therefore the "fully quiescent idle"
   guarantee) alive forever. The full-free branch (id actually freed) is
-  excluded from queuing: for `VimLeavePre` specifically, Neovim is exiting
-  right after, so a queued retry has nothing meaningful left to protect and
-  only risks racing a reused id against a process that's already gone; for
-  a fatal `M.show()` failure, nothing else references the brand-new id
-  either. If `find_reusable_entry` reclaims a still-queued id for a fresh
+  always excluded from queuing — nothing else references that id anymore.
+  The fan-out-sibling-still-shares-the-id case is excluded from queuing
+  only when the caller is truly shutting down (`opts.shutting_down`, set by
+  `VimLeavePre` and the test-only `_reset()`): the process (or test run) is
+  exiting right after, so a queued retry has nothing meaningful left to
+  protect and only risks racing a reused id against a process that's
+  already gone. A fatal `M.show()` failure tearing down a fan-out handle
+  whose sibling is still live does NOT set `shutting_down` — the process
+  keeps running and no future `redraw_all()` pass will ever revisit this
+  specific `(id, placement_id)` again once the handle is gone, so it gets
+  the same bounded retry as everyday teardown instead (issue #10). If
+  `find_reusable_entry` reclaims a still-queued id for a fresh
   placement before its retries are spent, the queued entries for that id
   are cancelled (`cancel_pending_delete`) — though even without that, a late
   retry naming the OLD `placement_id` could never hit the new placement's

@@ -1107,6 +1107,68 @@ T["redraw"]["ghostty: retries a failed retransmit without a further resize event
   MiniTest.expect.no_equality(handle.id, original_id)
 end
 
+T["redraw"]["ghostty: migrates a whole fanned-out group sharing a stale id together (issue #10)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local first = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  local second = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 4, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(first.visible, true)
+  MiniTest.expect.equality(second.visible, true)
+  MiniTest.expect.equality(first.id, second.id)
+  local original_id = first.id
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(1000, function()
+    return any_captured_has("a=T")
+  end)
+  vim.o.columns = original_columns
+
+  -- Both siblings migrate onto the SAME fresh id, atomically: exactly one
+  -- a=T (the shared pixel data, sent once — not re-transmitted per
+  -- handle), exactly one a=p placing the other sibling onto that same new
+  -- id, and the old id freed exactly once, not per-handle.
+  MiniTest.expect.equality(first.visible, true)
+  MiniTest.expect.equality(second.visible, true)
+  MiniTest.expect.equality(first.id, second.id)
+  MiniTest.expect.no_equality(first.id, original_id)
+
+  local transmit_count, free_count, sibling_placed = 0, 0, false
+  for _, seq in ipairs(captured) do
+    local all = table.concat(seq, "")
+    if all:find("a=T", 1, true) then
+      transmit_count = transmit_count + 1
+    end
+    if all:find("d=I", 1, true) and all:find("i=" .. original_id, 1, true) then
+      free_count = free_count + 1
+    end
+    if
+      all:find("a=p", 1, true)
+      and all:find("i=" .. first.id, 1, true)
+      and (
+        all:find(",p=" .. second.placement_id, 1, true) ~= nil
+        or all:find(",p=" .. first.placement_id, 1, true) ~= nil
+      )
+    then
+      sibling_placed = true
+    end
+  end
+  MiniTest.expect.equality(transmit_count, 1)
+  MiniTest.expect.equality(free_count, 1)
+  MiniTest.expect.equality(sibling_placed, true)
+end
+
 T["redraw"]["ghostty: does not retransmit a still-visible handle when size is unchanged"] = function()
   renderer._detect_fn = function()
     return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
