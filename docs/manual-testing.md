@@ -27,6 +27,13 @@ WezTerm (and Ghostty when available) before tagging a release.
       stuck at its old position overlapping buffer text (issue #18).
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
+- [ ] `show()` the same PNG path twice at two different buffer lines
+      without `clear()`-ing the first in between (issue #10, multi-location
+      fan-out). Both copies must render correctly and simultaneously — not
+      just the second one, and not the first one moved/disappeared. Then
+      `clear()` only the first handle: the second must remain visible,
+      unaffected. Finally `clear()` the second handle too and confirm no
+      stray pixels remain from either.
 - [ ] Scrolling so the image is cut off at the top or bottom of the window
       shows a **cropped** slice of the image (the still-visible portion,
       correctly sized to the remaining cell span) instead of a blank gap or

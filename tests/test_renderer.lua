@@ -321,13 +321,71 @@ T["show"]["cache hit on idle entry places without retransmitting"] = function()
   MiniTest.expect.equality(all:find("a=p", 1, true) ~= nil, true)
 end
 
-T["show"]["active cache entry forces a fresh id, never relocates"] = function()
+T["show"]["active cache entry fans out onto the same id, no retransmit (issue #10)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local first = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  MiniTest.expect.equality(first.visible, true)
+
+  captured = {}
+  local second = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 4 })
+  MiniTest.expect.equality(second.visible, true)
+
+  -- Same image id (no re-transmission), but each placement carries its own
+  -- distinct placement_id so neither one ever displaces the other.
+  MiniTest.expect.equality(second.id, first.id)
+  MiniTest.expect.no_equality(second.placement_id, first.placement_id)
+
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find("a=T", 1, true), nil)
+  MiniTest.expect.equality(all:find("a=p", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",p=" .. second.placement_id, 1, true) ~= nil, true)
+end
+
+T["show"]["clearing one fanned-out handle leaves its sibling's placement alone (issue #10)"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
 
   local first = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
   local second = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 4 })
 
-  MiniTest.expect.no_equality(first.id, second.id)
+  captured = {}
+  renderer.clear(first)
+
+  -- Scoped to first's own placement_id only: second's placement_id never
+  -- appears in the delete blit sends.
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. first.id .. ",p=" .. first.placement_id .. ESC .. "\\"
+  )
+  MiniTest.expect.equality(all:find(",p=" .. second.placement_id, 1, true), nil)
+  MiniTest.expect.equality(second.visible, true)
+end
+
+T["show"]["VimLeavePre frees data only once the last fanned-out handle is gone (issue #10)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local first = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  local second = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 4 })
+  MiniTest.expect.equality(first.id, second.id)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("VimLeavePre", {})
+
+  local free_count, scoped_count = 0, 0
+  for _, seq in ipairs(captured) do
+    local all = table.concat(seq, "")
+    if all:find("d=I", 1, true) then
+      free_count = free_count + 1
+    elseif all:find("d=i", 1, true) then
+      scoped_count = scoped_count + 1
+    end
+  end
+  -- One handle's teardown only removes its own placement (the id is still
+  -- shared); the other, destroyed once nothing references the id anymore,
+  -- is the one that actually frees the terminal-side pixel data.
+  MiniTest.expect.equality(free_count, 1)
+  MiniTest.expect.equality(scoped_count, 1)
 end
 
 T["show"]["ghostty: reuses idle cache entry when terminal size is unchanged"] = function()
@@ -483,12 +541,19 @@ T["show"]["re-placing a later handle catches up an earlier handle's stale positi
     { width = 5, height = 3, buf = buf, win = win, lnum = 1, debounce_ms = 5 }
   )
   MiniTest.expect.equality(b.visible, true)
-  MiniTest.expect.no_equality(a.id, b.id)
+  -- Same file, both still active: b fans out onto a's id (issue #10) rather
+  -- than getting a fresh one, but each keeps its own placement_id.
+  MiniTest.expect.equality(a.id, b.id)
+  MiniTest.expect.no_equality(a.placement_id, b.placement_id)
 
   local function a_was_replaced()
     for _, seq in ipairs(captured) do
       local all = table.concat(seq, "")
-      if all:find("a=p", 1, true) and all:find("i=" .. a.id, 1, true) then
+      if
+        all:find("a=p", 1, true)
+        and all:find("i=" .. a.id, 1, true)
+        and all:find(",p=" .. a.placement_id, 1, true)
+      then
         return true
       end
     end
@@ -509,7 +574,10 @@ T["clear"]["deletes placement and extmark"] = function()
   renderer.clear(handle)
 
   local all = table.concat(captured[1], "")
-  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 
   local ns = vim.api.nvim_create_namespace("blit")
   local mark = vim.api.nvim_buf_get_extmark_by_id(buf, ns, handle.extmark_id, {})
@@ -537,7 +605,10 @@ T["clear"]["self-retries a=d a bounded number of times with no further events (i
   MiniTest.expect.equality(#captured, 4)
   for _, seq in ipairs(captured) do
     local all = table.concat(seq, "")
-    MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+    MiniTest.expect.equality(
+      all,
+      ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+    )
   end
 
   -- The retry budget is bounded: nothing further is sent once it's spent.
@@ -609,7 +680,10 @@ T["redraw"]["hides when the anchor line scrolls past the top edge (issue #28)"] 
 
   MiniTest.expect.equality(handle.visible, false)
   local all = table.concat(captured[1], "")
-  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 end
 
 T["redraw"]["reissues a=d on every pass while invisible past the top edge (issue #28)"] = function()
@@ -643,7 +717,10 @@ T["redraw"]["reissues a=d on every pass while invisible past the top edge (issue
   MiniTest.expect.equality(handle.visible, false)
   MiniTest.expect.equality(#captured, 1)
   local all = table.concat(captured[1], "")
-  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 end
 
 T["redraw"]["hides once the window shrinks below the reserved rows"] = function()
@@ -667,7 +744,10 @@ T["redraw"]["hides once the window shrinks below the reserved rows"] = function(
 
   MiniTest.expect.equality(handle.visible, false)
   local all = table.concat(captured[1], "")
-  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 end
 
 T["redraw"]["reissues a=d on every pass while still invisible (issue #23)"] = function()
@@ -702,7 +782,10 @@ T["redraw"]["reissues a=d on every pass while still invisible (issue #23)"] = fu
   MiniTest.expect.equality(handle.visible, false)
   MiniTest.expect.equality(#captured, 1)
   local all = table.concat(captured[1], "")
-  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 end
 
 T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function()
@@ -721,7 +804,10 @@ T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function
   end)
   MiniTest.expect.equality(handle.visible, false)
   local hide_all = table.concat(captured[1], "")
-  MiniTest.expect.equality(hide_all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    hide_all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 
   captured = {}
   vim.cmd("tabclose")
@@ -854,7 +940,10 @@ T["redraw"]["source-rect crop"]["hides once the reserved block has fully scrolle
 
   MiniTest.expect.equality(handle.visible, false)
   local all = table.concat(captured[1], "")
-  MiniTest.expect.equality(all, ESC .. "_Ga=d,d=i,i=" .. handle.id .. ESC .. "\\")
+  MiniTest.expect.equality(
+    all,
+    ESC .. "_Ga=d,d=i,i=" .. handle.id .. ",p=" .. handle.placement_id .. ESC .. "\\"
+  )
 end
 
 T["redraw"]["source-rect crop"]["two handles anchored at the same lnum hide instead of risking a wrong crop"] = function()
@@ -1016,6 +1105,68 @@ T["redraw"]["ghostty: retries a failed retransmit without a further resize event
   MiniTest.expect.equality(transmit_attempts, 2)
   MiniTest.expect.equality(handle.visible, true)
   MiniTest.expect.no_equality(handle.id, original_id)
+end
+
+T["redraw"]["ghostty: migrates a whole fanned-out group sharing a stale id together (issue #10)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local first = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  local second = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 4, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(first.visible, true)
+  MiniTest.expect.equality(second.visible, true)
+  MiniTest.expect.equality(first.id, second.id)
+  local original_id = first.id
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(1000, function()
+    return any_captured_has("a=T")
+  end)
+  vim.o.columns = original_columns
+
+  -- Both siblings migrate onto the SAME fresh id, atomically: exactly one
+  -- a=T (the shared pixel data, sent once — not re-transmitted per
+  -- handle), exactly one a=p placing the other sibling onto that same new
+  -- id, and the old id freed exactly once, not per-handle.
+  MiniTest.expect.equality(first.visible, true)
+  MiniTest.expect.equality(second.visible, true)
+  MiniTest.expect.equality(first.id, second.id)
+  MiniTest.expect.no_equality(first.id, original_id)
+
+  local transmit_count, free_count, sibling_placed = 0, 0, false
+  for _, seq in ipairs(captured) do
+    local all = table.concat(seq, "")
+    if all:find("a=T", 1, true) then
+      transmit_count = transmit_count + 1
+    end
+    if all:find("d=I", 1, true) and all:find("i=" .. original_id, 1, true) then
+      free_count = free_count + 1
+    end
+    if
+      all:find("a=p", 1, true)
+      and all:find("i=" .. first.id, 1, true)
+      and (
+        all:find(",p=" .. second.placement_id, 1, true) ~= nil
+        or all:find(",p=" .. first.placement_id, 1, true) ~= nil
+      )
+    then
+      sibling_placed = true
+    end
+  end
+  MiniTest.expect.equality(transmit_count, 1)
+  MiniTest.expect.equality(free_count, 1)
+  MiniTest.expect.equality(sibling_placed, true)
 end
 
 T["redraw"]["ghostty: does not retransmit a still-visible handle when size is unchanged"] = function()

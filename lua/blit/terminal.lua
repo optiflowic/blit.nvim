@@ -13,6 +13,7 @@ local APC_END = ESC .. "\\"
 ---@alias blit.terminal.Action "T"|"t"
 
 ---@class blit.terminal.PlacementOpts
+---@field placement_id integer this placement's `p=` id — see below
 ---@field columns? integer
 ---@field rows? integer
 ---@field z_index? integer
@@ -28,14 +29,25 @@ local APC_END = ESC .. "\\"
 ---@field quiet? 0|1|2                  -- default 2
 ---@field placement? blit.terminal.PlacementOpts
 
--- Every blit placement uses this single fixed placement id. renderer.lua's
--- cache never marks the same image id "active" for more than one handle at
--- once, so a given id has at most one live placement at any time — reusing
--- a constant placement id means a reposition (`a=p,i=<id>,p=1,...`) UPDATES
--- that placement in place. Omitting `p=` entirely (or varying it) makes the
--- terminal create an additional, stacked placement instead of moving the
--- existing one — see docs/spec/kitty-graphics.md's Placement section.
-M.PLACEMENT_ID = 1
+-- Every real placement command carries a caller-supplied `p=` (placement
+-- id), scoping it to one specific placement of one image id rather than
+-- "the" placement — the same image id can now have several concurrent
+-- placements (issue #10, "Multi-location placement fan-out"). Reusing the
+-- SAME (id, placement_id) pair across calls makes a reposition
+-- (`a=p,i=<id>,p=<pid>,...`) UPDATE that one placement in place, exactly as
+-- the old fixed `p=1` did; a DIFFERENT placement_id on the same id instead
+-- adds a second, independent placement without re-sending pixel data.
+-- Allocating distinct ids per placement — never reusing one across two
+-- concurrently-live placements — is renderer.lua's responsibility (it owns
+-- the handle table), per AGENTS.md's architecture; terminal.lua only knows
+-- how to encode whatever id it's given. See
+-- docs/spec/kitty-graphics.md's Placement section.
+
+---@param v any
+---@return boolean
+local function is_positive_integer(v)
+  return type(v) == "number" and v == math.floor(v) and v > 0
+end
 
 ---@param parts { [1]: string, [2]: string|integer }[]
 ---@return string
@@ -125,6 +137,13 @@ function M.build_transmit(png_bytes, opts)
       end,
       "0, 1, or 2",
     },
+    placement = {
+      opts.placement,
+      function(v)
+        return v == nil or is_positive_integer(v.placement_id)
+      end,
+      "a table with a positive integer placement_id, or nil",
+    },
   })
 
   local action = opts.action or "T"
@@ -149,7 +168,7 @@ function M.build_transmit(png_bytes, opts)
         { "q", quiet },
       }
       if opts.placement then
-        parts[#parts + 1] = { "p", M.PLACEMENT_ID }
+        parts[#parts + 1] = { "p", opts.placement.placement_id }
       end
       append_placement_parts(parts, opts.placement)
       parts[#parts + 1] = { "m", more }
@@ -163,22 +182,44 @@ function M.build_transmit(png_bytes, opts)
 end
 
 ---@param id integer
----@param opts? blit.terminal.PlacementOpts
+---@param opts blit.terminal.PlacementOpts
 ---@return string sequence
 function M.build_placement(id, opts)
-  vim.validate({ id = { id, M.is_valid_id, "a valid id in blit's reserved range" } })
-  local parts = { { "a", "p" }, { "i", id }, { "p", M.PLACEMENT_ID } }
+  vim.validate({
+    id = { id, M.is_valid_id, "a valid id in blit's reserved range" },
+    opts = { opts, "table" },
+    placement_id = { opts.placement_id, is_positive_integer, "a positive integer" },
+  })
+  local parts = { { "a", "p" }, { "i", id }, { "p", opts.placement_id } }
   append_placement_parts(parts, opts)
   return APC_START .. build_control(parts) .. APC_END
 end
 
 ---@param id integer
----@param opts? { free_data?: boolean }
+---@param opts? { free_data?: boolean, placement_id?: integer }
 ---@return string sequence
 function M.build_delete(id, opts)
-  vim.validate({ id = { id, M.is_valid_id, "a valid id in blit's reserved range" } })
+  vim.validate({
+    id = { id, M.is_valid_id, "a valid id in blit's reserved range" },
+    placement_id = {
+      opts and opts.placement_id,
+      function(v)
+        return v == nil or is_positive_integer(v)
+      end,
+      "a positive integer, or nil",
+    },
+  })
   local d = (opts and opts.free_data) and "I" or "i"
   local parts = { { "a", "d" }, { "d", d }, { "i", id } }
+  -- `p=` restricts the delete to one specific placement of this id instead
+  -- of every placement blit has made for it — required now that one id can
+  -- have several concurrent placements (issue #10). Omitted only for the
+  -- whole-id teardown case (free_data=true once no handle references the
+  -- id anymore — see renderer.lua's destroy_handle), where every placement
+  -- is being torn down together anyway.
+  if opts and opts.placement_id then
+    parts[#parts + 1] = { "p", opts.placement_id }
+  end
   return APC_START .. build_control(parts) .. APC_END
 end
 
@@ -198,12 +239,6 @@ end
 ---@return string
 function M.build_restore_cursor()
   return ESC .. "8"
-end
-
----@param v any
----@return boolean
-local function is_positive_integer(v)
-  return type(v) == "number" and v == math.floor(v) and v > 0
 end
 
 ---@param row integer 1-indexed screen row
