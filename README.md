@@ -43,6 +43,16 @@ See `AGENTS.md` for the full set of project constraints and architecture.
 
 ## Known Issues
 
+- **A buffer split into a second window shows blank space, not the image.**
+  `show()` binds a placement to one specific window; if the same buffer is
+  also open in another window (`:split`/`:vsplit`), that window renders the
+  reserved blank `virt_lines` rows with no image in them — `show()` doesn't
+  auto-detect the split and place into it. Work around this today by calling
+  `show()` again with `opts.win` set to the second window and the same
+  `path`: blit reuses the already-transmitted image data instead of
+  re-sending it, adding an independent placement for the new window at no
+  extra transmission cost ([#10](https://github.com/optiflowic/blit.nvim/issues/10)).
+
 - **WezTerm: process crash under sustained fast scrolling** ([#31](https://github.com/optiflowic/blit.nvim/issues/31)).
   Scrolling quickly and continuously with an image anchored away from the top
   of the buffer can crash the WezTerm process itself (not just the pane),
