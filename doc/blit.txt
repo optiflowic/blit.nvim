@@ -84,6 +84,14 @@ show({path}, {opts})
     for its real cell-pixel size, so this is an approximation; when both
     {width} and {height} are supplied, they pass through unvalidated.
 
+    Calling |blit.show()| again for the same {path} (matching file content,
+    by `(path, mtime)`) reuses the already-transmitted image data instead of
+    re-sending it, adding an independent placement rather than a redundant
+    copy. This is also how to display the same image in more than one
+    window at once — e.g. after `:split` — since one handle is bound to one
+    {win}: call |blit.show()| a second time with {opts.win} set to the
+    second window and the same {path}.
+
                                                               *blit.clear()*
 clear({handle})
     Remove the placement and extmark for a handle returned by |blit.show()|.
