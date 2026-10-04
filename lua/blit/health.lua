@@ -3,6 +3,7 @@
 -- docs/spec/terminal-detection.md for the detection matrix this reflects.
 
 local terminal = require("blit.terminal")
+local renderer = require("blit.renderer")
 
 local M = {}
 
@@ -37,6 +38,22 @@ function M.check()
 
   if caps.terminal == "wezterm" then
     vim.health.warn(WEZTERM_CRASH_WARNING)
+  end
+
+  if terminal.has_response_support() then
+    vim.health.ok("Terminal error responses are reported here (Neovim >= 0.12)")
+  else
+    vim.health.info("Terminal error responses need Neovim >= 0.12; they stay suppressed")
+  end
+
+  for _, response_error in ipairs(renderer.response_errors()) do
+    vim.health.error(
+      ("terminal rejected image id %d (%s): %s"):format(
+        response_error.id,
+        response_error.path or "no longer displayed",
+        response_error.message
+      )
+    )
   end
 
   if caps.supported then

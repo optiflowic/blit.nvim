@@ -479,6 +479,29 @@ created for them. Like `debounce_timer`, `ghostty_retransmit_timer` is
 stopped and closed by `maybe_teardown_autocmds()` once zero handles remain,
 preserving the "no timers active when zero images are displayed" rule.
 
+## Terminal error responses
+
+On Neovim >= 0.12 (`terminal.has_response_support()`, see
+`docs/spec/kitty-graphics.md`'s "Response handling"), `ensure_autocmds`
+adds one `TermResponse` autocmd to the `blit` augroup. Its callback hands
+every sequence to `terminal.parse_response()` and records the result when
+it is an error (`ok == false`) for an id blit currently owns (`used_ids`);
+`OK` responses, foreign ids, and unrelated OSC/DCS responses are ignored.
+
+Recorded errors live in a bounded list (the most recent 20, oldest
+dropped first) of `{ id, placement_id?, path?, message }`; `path` comes
+from a live handle using that id and is nil once none does.
+`renderer.response_errors()` returns a copy, and `:checkhealth blit`
+prints each entry. The list is never cleared during a session — it is a
+diagnostic log, not handle state — and recording an error changes nothing
+about the handle, its extmark, or the transmission cache.
+
+The listener belongs to the handle-gated augroup, so it is removed with
+the last handle like every other autocmd (no listener while idle). An
+error that arrives after that teardown is not recorded.
+
+On Neovim 0.10 / 0.11 no listener is registered and the list stays empty.
+
 ## Lifecycle
 
 Two distinct kinds of state transition, kept separate:

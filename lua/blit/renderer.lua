@@ -66,6 +66,42 @@ M._redraw_fn = function()
   vim.cmd("redraw")
 end
 
+-- Overridable seam for tests: production code always asks terminal.lua
+-- whether this Neovim can deliver protocol responses at all.
+M._has_response_support_fn = terminal.has_response_support
+
+-- Terminal error responses ----------------------------------------------------
+-- See docs/spec/renderer-placement.md's "Terminal error responses" section.
+
+local MAX_RESPONSE_ERRORS = 20
+
+---@class blit.ResponseError
+---@field id integer
+---@field placement_id? integer
+---@field path? string nil when no live handle references the id anymore
+---@field message string the terminal's `<CODE>:<text>` error string
+
+---@type blit.ResponseError[]
+local response_errors = {}
+
+-- `q=1` keeps `OK` suppressed but lets error responses through; only worth
+-- asking for when something can actually receive them.
+---@return 1|2
+local function transmit_quiet()
+  return M._has_response_support_fn() and 1 or 2
+end
+
+---@param id integer
+---@return string?
+local function path_for_id(id)
+  for _, handle in ipairs(M._handles) do
+    if handle.id == id then
+      return handle.path
+    end
+  end
+  return nil
+end
+
 -- Image id allocation ---------------------------------------------------------
 -- Pure logic over terminal.lua's reserved range. Ids are handed out
 -- sequentially and only returned to the free pool by destroy_handle's
@@ -729,6 +765,7 @@ local function retransmit_and_place_group(handles)
       terminal.build_transmit(bytes, {
         id = new_id,
         action = "T",
+        quiet = transmit_quiet(),
         placement = placement_opts(display_handle, placements[display_handle]),
       })
     )
@@ -737,7 +774,10 @@ local function retransmit_and_place_group(handles)
     -- No handle sharing this id is currently visible; keep the data ready
     -- (transmit-only) so whichever handle becomes visible next places
     -- correctly against the new id without needing its own re-transmit.
-    vim.list_extend(sequences, terminal.build_transmit(bytes, { id = new_id, action = "t" }))
+    vim.list_extend(
+      sequences,
+      terminal.build_transmit(bytes, { id = new_id, action = "t", quiet = transmit_quiet() })
+    )
   end
 
   for _, h in ipairs(handles) do
@@ -1117,6 +1157,23 @@ local function on_vim_leave_pre()
   terminal.reset_writer()
 end
 
+---@param sequence any the TermResponse event's `sequence`
+local function record_response_error(sequence)
+  local response = terminal.parse_response(sequence)
+  if not response or response.ok or not used_ids[response.id] then
+    return
+  end
+  table.insert(response_errors, {
+    id = response.id,
+    placement_id = response.placement_id,
+    path = path_for_id(response.id),
+    message = response.message,
+  })
+  if #response_errors > MAX_RESPONSE_ERRORS then
+    table.remove(response_errors, 1)
+  end
+end
+
 local function ensure_autocmds()
   if autocmds_ready then
     return
@@ -1154,6 +1211,15 @@ local function ensure_autocmds()
     group = group,
     callback = on_vim_leave_pre,
   })
+
+  if M._has_response_support_fn() then
+    vim.api.nvim_create_autocmd("TermResponse", {
+      group = group,
+      callback = function(args)
+        record_response_error(type(args.data) == "table" and args.data.sequence or nil)
+      end,
+    })
+  end
 end
 
 ---@param v any
@@ -1383,14 +1449,19 @@ function M.show(path, opts)
       )
       vim.list_extend(
         sequences,
-        terminal.build_transmit(
-          bytes,
-          { id = id, action = "T", placement = placement_opts(handle, placement) }
-        )
+        terminal.build_transmit(bytes, {
+          id = id,
+          action = "T",
+          quiet = transmit_quiet(),
+          placement = placement_opts(handle, placement),
+        })
       )
       table.insert(sequences, terminal.build_restore_cursor())
     else
-      vim.list_extend(sequences, terminal.build_transmit(bytes, { id = id, action = "t" }))
+      vim.list_extend(
+        sequences,
+        terminal.build_transmit(bytes, { id = id, action = "t", quiet = transmit_quiet() })
+      )
     end
     local ok, err = M._write_fn(sequences)
     if not ok then
@@ -1418,6 +1489,13 @@ function M.show(path, opts)
   end
 
   return handle
+end
+
+-- Error responses the terminal sent back for blit's own ids, oldest first
+-- (bounded to the most recent few). Always empty on Neovim < 0.12.
+---@return blit.ResponseError[]
+function M.response_errors()
+  return vim.deepcopy(response_errors)
 end
 
 ---@param handle blit.Handle
@@ -1453,6 +1531,8 @@ function M._reset()
   used_ids = {}
   next_id = terminal.ID_RANGE_START
   next_placement_id = 1
+  response_errors = {}
+  M._has_response_support_fn = terminal.has_response_support
   M._write_fn = function(sequences)
     return terminal.write(sequences)
   end

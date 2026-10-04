@@ -31,7 +31,9 @@ hidden only once it has no overlap with the window at all. See
 - tmux is explicitly unsupported in v0.x; blit no-ops under tmux
 - GUI frontends and `--embed` (e.g. Neovide) are unsupported; blit no-ops
 
-Run `:checkhealth blit` to see detection results for your environment.
+Run `:checkhealth blit` to see detection results for your environment. On
+Neovim >= 0.12 it also lists any error the terminal sent back for an image
+(e.g. a PNG it rejected); on 0.10 / 0.11 those errors are not available.
 
 ==============================================================================
 3. Setup                                                          *blit-setup*
