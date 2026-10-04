@@ -67,10 +67,15 @@ show({path}, {opts})
       buf         buffer to anchor in (default: current buffer of {win})
       win         window to anchor in (default: current window)
       lnum        1-indexed anchor line (default: {win}'s cursor line)
-      col         0-indexed anchor byte column (default: 0). Currently
-                  unused for placement — virt_lines always render at the
-                  window's text-area left edge, independent of the
-                  extmark's column. Reserved for future use.
+      col         0-indexed horizontal offset of the image's left edge
+                  from the window's text-area left edge, in display cells
+                  (default: 0). A cell count, not a byte column: it does
+                  not depend on the anchor line's text. To align with a
+                  character, pass e.g.
+                  `vim.fn.strdisplaywidth(line:sub(1, byte_col))`. Must be
+                  a non-negative integer. An image pushed partway past
+                  the window's right edge is cropped; pushed entirely
+                  past it, hidden.
       z_index     kitty placement z-index (default: unset)
       cell_aspect_ratio  assumed terminal cell width-px/height-px ratio,
                   used only to derive an omitted {width}/{height} (default:

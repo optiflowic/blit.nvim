@@ -25,6 +25,14 @@ WezTerm (and Ghostty when available) before tagging a release.
       image repositions the first image to follow its shifted `virt_lines`
       block within about one debounce interval, instead of leaving it
       stuck at its old position overlapping buffer text (issue #18).
+- [ ] `show(path, { width = 10, height = 5, col = 8 })` renders the image
+      8 cells to the right of the window's text-area left edge (i.e. past
+      any number/sign column, aligned with the 9th text cell), inside its
+      reserved blank rows (issue #9). Scroll it partway off the top of the
+      window and confirm the cropped tail keeps the same horizontal
+      offset. Repeat with a `col` large enough that the image overhangs
+      the window's right edge: the visible part must be a clean
+      column-cropped slice, not stretched or wrapped onto the next row.
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
 - [ ] `show()` the same PNG path twice at two different buffer lines

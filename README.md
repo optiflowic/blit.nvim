@@ -81,6 +81,15 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
 
 ## Changelog
 
+### Unreleased
+
+- **Breaking**: `show()`'s `opts.col` now positions the image horizontally,
+  as a 0-indexed display-cell offset from the window's text-area left edge
+  ([#9](https://github.com/optiflowic/blit.nvim/issues/9)). It was previously
+  documented as an anchor byte column and silently ignored; it is now
+  validated as a non-negative integer, so a negative or fractional `col`
+  that used to be accepted raises an argument error.
+
 ### v0.2.0 (2026-08-08)
 
 - Renderer: a placement scrolled partway past a window edge shows a cropped
