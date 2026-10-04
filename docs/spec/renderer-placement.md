@@ -62,12 +62,39 @@ unimplemented. Accepted for v0.x.
 screen row/col, or `row = 0` if that position is not currently rendered at
 all (scrolled off, inside a closed fold, wrong window). `renderer.lua` calls
 this with the anchor line and column 1 — always column 1, never
-`geometry.col` — to get the anchor's screen column and to test visibility.
-Column 1 is used unconditionally because `virt_lines` always render starting
-at the window's text-area left edge, independent of the extmark's own
-column (the extmark itself is created at a hardcoded column 0 below);
-`geometry.col`/`opts.col` is currently unused for placement, reserved for a
-future version that supports horizontal positioning some other way.
+`geometry.col` — to get the window's text-area left edge and to test
+visibility. Column 1 is used unconditionally because `virt_lines` always
+render starting at the window's text-area left edge, independent of the
+extmark's own column (the extmark itself is created at a hardcoded column 0
+below).
+
+### Horizontal positioning (issue #9)
+
+`geometry.col`/`opts.col` is a 0-indexed **display-cell offset** from that
+text-area left edge, not a buffer byte column: `screen_col = screenpos(win,
+lnum, 1).col + geometry.col`. The `virt_lines` block only reserves blank
+rows — the image itself is drawn out of band at an absolute screen position
+— so shifting it horizontally needs no change to the extmark at all, only
+this one addition. Everything downstream is unchanged: `compute_clip`
+already clips the resulting column span against the window's left/right
+bounds, so an offset that pushes the image partway past the right edge
+shows a column-cropped slice, and one that pushes it entirely past hides
+the placement (see "Visibility policy" below).
+
+A cell offset was chosen over the byte-column meaning `col` was originally
+documented with (while it was still unused) because it depends on nothing
+but the window: a byte column would have to be converted through the anchor
+line's own text (tabs, wide characters, a column past the end of the line),
+has no single answer once `'wrap'` puts that column on a later screen row,
+and cannot be resolved through `screenpos()` at all in the scrolled-off
+`topfill` branch below, where the anchor line is not rendered. A caller that
+wants to align with a specific character converts it itself, e.g.
+`vim.fn.strdisplaywidth(line:sub(1, byte_col))`, and passes the result.
+
+The offset is relative to the text area, not to the text: it does not
+follow `'nowrap'` horizontal scrolling (`leftcol`). This matches the
+reserved `virt_lines` rows themselves, which do not scroll horizontally
+either. `show()` validates `col` as a non-negative integer.
 
 The reserved `virt_lines` block's first screen row is one past the anchor
 line's own **last** rendered screen row, not its first — under `'wrap'` a
@@ -200,7 +227,7 @@ crop math is identical to the normal path. The column for this branch comes
 from `screenpos(win, view.topline, 1)` (the line right after the anchor,
 guaranteed visible whenever this branch is reached) rather than the
 anchor's own — both render `virt_lines` at the same window text-area left
-edge. If `topline` doesn't match exactly or `topfill` is `0`, the block has
+edge — plus the same `geometry.col` cell offset as the normal path. If `topline` doesn't match exactly or `topfill` is `0`, the block has
 genuinely scrolled fully past and the handle is correctly hidden, same as
 before.
 

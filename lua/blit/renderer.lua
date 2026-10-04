@@ -19,9 +19,9 @@ local NAMESPACE = "blit"
 
 ---@class blit.Geometry
 ---@field lnum integer 1-indexed anchor buffer line
----@field col integer 0-indexed anchor byte column; currently unused for
----placement (virt_lines always render at the window's text-area left edge,
----independent of the extmark's column) — reserved for future use
+---@field col integer 0-indexed display-cell offset of the placement's left
+---edge from the window's text-area left edge (issue #9); independent of the
+---anchor line's own text
 ---@field cols integer target placement width in cell columns
 ---@field rows integer target placement height in cell rows
 
@@ -451,8 +451,9 @@ local function compute_placement(handle)
   -- (the same screen column as byte column 1 of any line), independent of
   -- the extmark's own column — nvim_buf_set_extmark below anchors it at
   -- column 0 regardless of handle.geometry.col. Column 1 is queried here
-  -- to match that, not handle.geometry.col (currently unused for
-  -- placement; see the Geometry class doc comment).
+  -- to find that left edge; handle.geometry.col is a display-cell offset
+  -- added on top of it below, not a byte column to query (issue #9; see
+  -- docs/spec/renderer-placement.md's "Screen coordinate conversion").
   local ok, pos = pcall(vim.fn.screenpos, handle.win, handle.geometry.lnum, 1)
   if not ok then
     return nil
@@ -470,7 +471,7 @@ local function compute_placement(handle)
     -- bounds.bottom + 1 makes compute_clip below report zero visible rows.
     local last_row = anchor_last_row(handle.win, handle.buf, handle.geometry.lnum)
     local screen_row = (last_row > 0 and last_row or bounds.bottom) + 1
-    screen_col = pos.col
+    screen_col = pos.col + handle.geometry.col
     row_lo, row_hi, vis_rows =
       compute_clip(screen_row, handle.geometry.rows, bounds.top, bounds.bottom)
     final_row = screen_row + row_lo
@@ -503,7 +504,7 @@ local function compute_placement(handle)
     if not ok2 or pos2.row <= 0 then
       return nil
     end
-    screen_col = pos2.col
+    screen_col = pos2.col + handle.geometry.col
     row_lo = math.max(0, handle.geometry.rows - view.topfill)
     local raw_visible = handle.geometry.rows - row_lo
     _, row_hi, vis_rows = compute_clip(bounds.top, raw_visible, bounds.top, bounds.bottom)
@@ -1169,6 +1170,12 @@ end
 
 ---@param v any
 ---@return boolean
+local function is_non_negative_integer_or_nil(v)
+  return v == nil or (type(v) == "number" and v == math.floor(v) and v >= 0)
+end
+
+---@param v any
+---@return boolean
 local function is_positive_number_or_nil(v)
   return v == nil or (type(v) == "number" and v > 0)
 end
@@ -1227,9 +1234,9 @@ M.resolve_cell_size = resolve_cell_size
 ---@field buf? integer defaults to the current buffer of {win}
 ---@field win? integer defaults to the current window
 ---@field lnum? integer 1-indexed anchor line, defaults to {win}'s cursor line
----@field col? integer 0-indexed anchor byte column, defaults to 0; currently
----unused for placement (virt_lines always render at the window's text-area
----left edge) — reserved for future use
+---@field col? integer 0-indexed display-cell offset of the image's left edge
+---from the window's text-area left edge, defaults to 0. A cell count, not a
+---byte column: independent of the anchor line's own text.
 ---@field z_index? integer
 ---@field max_file_bytes? integer defaults to blit.config.defaults.max_file_bytes
 ---@field debounce_ms? integer defaults to the last configured value (initially 16)
@@ -1256,7 +1263,11 @@ function M.show(path, opts)
     buf = { opts.buf, "number", true },
     win = { opts.win, "number", true },
     lnum = { opts.lnum, "number", true },
-    col = { opts.col, "number", true },
+    col = {
+      opts.col,
+      is_non_negative_integer_or_nil,
+      "a non-negative integer (cell columns), or nil",
+    },
     z_index = { opts.z_index, "number", true },
     max_file_bytes = { opts.max_file_bytes, "number", true },
     debounce_ms = { opts.debounce_ms, "number", true },

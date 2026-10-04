@@ -450,6 +450,18 @@ T["show"]["rejects a non-positive width/height"] = function()
   MiniTest.expect.equality(ok, false)
 end
 
+T["show"]["rejects a negative or fractional col (issue #9)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  for _, col in ipairs({ -1, 1.5 }) do
+    local ok = pcall(
+      renderer.show,
+      tmp_path,
+      { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = col }
+    )
+    MiniTest.expect.equality(ok, false)
+  end
+end
+
 T["show"]["rejects omitting both width and height"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local ok = pcall(renderer.show, tmp_path, { buf = buf, win = win, lnum = 2 })
@@ -819,6 +831,109 @@ T["redraw"]["hides on TabLeave and restores on TabEnter (issue #16)"] = function
   local show_all = table.concat(captured[1], "")
   MiniTest.expect.equality(show_all:find("a=p", 1, true) ~= nil, true)
   MiniTest.expect.equality(show_all:find("i=" .. handle.id, 1, true) ~= nil, true)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"] = MiniTest.new_set()
+
+T["redraw"]["horizontal col offset (issue #9)"]["col = 0 places at the text-area left edge"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 0 })
+  -- anchor screen row 2 -> virt_lines start at row 3; text-area left edge is screen col 1.
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[3;1H", 1, true) ~= nil, true)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["shifts the placement right by col cells"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle =
+    renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 8 })
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[3;9H", 1, true) ~= nil, true)
+  -- cols 9-13 fit inside the 20-col window: unclipped, full width, no crop keys.
+  MiniTest.expect.equality(all:find(",c=5", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",w=", 1, true), nil)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["is a cell offset, independent of the anchor line's text"] = function()
+  -- A tab and a wide character before byte column 8 would move a byte-column
+  -- anchor; a cell offset must land on the same screen column regardless.
+  -- (The line is 14 cells wide, so it does not wrap in the 20-col window.)
+  local buf, win = setup_floating({ "x", "\t日本語", "y" }, 20, 10)
+  renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 8 })
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[3;9H", 1, true) ~= nil, true)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["offsets from the text area, past the number column"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  vim.wo[win].number = true
+  vim.wo[win].numberwidth = 4
+  renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 3 })
+  -- 4-cell number column -> text area starts at screen col 5; +3 -> col 8.
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[3;8H", 1, true) ~= nil, true)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["overhanging the right edge crops the column span"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle =
+    renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 17 })
+  -- screen cols 18-22 vs. window right edge col 20: 3 visible, 2 clipped.
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[3;18H", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",c=3", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",w=", 1, true) ~= nil, true)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["last cell inside the right edge stays visible"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle =
+    renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 19 })
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[3;20H", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",c=1", 1, true) ~= nil, true)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["entirely past the right edge: transmit-only, not displayed"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle =
+    renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 20 })
+  MiniTest.expect.equality(handle.visible, false)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "7", 1, true), nil)
+end
+
+T["redraw"]["horizontal col offset (issue #9)"]["keeps the offset in the scrolled-off-anchor (topfill) branch"] = function()
+  local buf, win = setup_floating(numbered_lines(20), 20, 10)
+  vim.wo[win].scrolloff = 0
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 5, buf = buf, win = win, lnum = 1, col = 8, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+
+  local ctrl_e = vim.api.nvim_replace_termcodes("<C-e>", true, true, true)
+  for _ = 1, 3 do
+    vim.api.nvim_win_call(win, function()
+      vim.cmd("normal! " .. ctrl_e)
+    end)
+    vim.cmd("redraw")
+  end
+  MiniTest.expect.equality(vim.api.nvim_win_call(win, vim.fn.winsaveview).topfill, 3)
+
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+  vim.wait(500, function()
+    return #captured > 0
+  end)
+
+  MiniTest.expect.equality(handle.visible, true)
+  local all = table.concat(captured[1], "")
+  MiniTest.expect.equality(all:find(ESC .. "[1;9H", 1, true) ~= nil, true)
+  MiniTest.expect.equality(all:find(",r=3", 1, true) ~= nil, true)
 end
 
 T["redraw"]["source-rect crop"] = MiniTest.new_set()
