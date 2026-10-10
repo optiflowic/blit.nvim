@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v0.2.0...blit.nvim-v0.3.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* opts.col is now a 0-indexed display-cell offset from the window's text-area left edge, not an anchor byte column, and is validated as a non-negative integer. A negative or fractional col that was previously accepted (and ignored) now raises an argument error.
+
+### Features
+
+* position placements horizontally via a col cell offset ([#55](https://github.com/optiflowic/blit.nvim/issues/55)) ([b048f17](https://github.com/optiflowic/blit.nvim/commit/b048f17862027b1434266768bd85e38840124d66))
+* support multi-location placement fan-out for one transmitted image ([#51](https://github.com/optiflowic/blit.nvim/issues/51)) ([9ae8bad](https://github.com/optiflowic/blit.nvim/commit/9ae8baddf63ef59bd71eb32b1e0b7c3365e32d8a))
+* surface terminal error responses via TermResponse on Neovim &gt;= 0.12 ([#56](https://github.com/optiflowic/blit.nvim/issues/56)) ([31d0f13](https://github.com/optiflowic/blit.nvim/commit/31d0f13a80d1d355b378d43d36b27978727a1382))
+
 ## [0.2.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v0.1.0...blit.nvim-v0.2.0) (2026-07-25)
 
 
