@@ -35,6 +35,10 @@ WezTerm (and Ghostty when available) before tagging a release.
       column-cropped slice, not stretched or wrapped onto the next row.
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
+- [ ] `show()` a PNG, `clear()` it, overwrite the file at the same path
+      with a visibly different PNG, then `show()` that path again (issue
+      #11, superseded-mtime eviction). The new image must render, with no
+      leftover copy of the old one anywhere on screen.
 - [ ] `show()` the same PNG path twice at two different buffer lines
       without `clear()`-ing the first in between (issue #10, multi-location
       fan-out). Both copies must render correctly and simultaneously — not

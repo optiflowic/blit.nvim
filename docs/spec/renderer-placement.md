@@ -348,20 +348,69 @@ freed (`d=I`, no `p=`) once `active_placements` reaches `0` **and** the
 caller's intent was to free it (`VimLeavePre`'s full teardown, or a fatal
 failure right after `M.show()` created the handle) — an everyday
 `clear()`/`clear_all()` never frees data even when it drops the count to
-`0`, keeping the entry idle-but-warm for a future `show()` instead.
+`0`, keeping the entry idle-but-warm for a future `show()` instead. The
+only other path that frees data is eviction of an already-idle entry,
+below.
 
-Cache entries are otherwise never evicted except at `VimLeavePre` (or the
-test-only `_reset()`) — an idle entry's id and terminal-side pixel data are
-kept around so a later `show()` of the same file is cheap. **Known
-limitation**: this means the id pool (65,536 ids,
-`docs/spec/kitty-graphics.md`'s reserved range) is not reclaimed during a
-long session that `show()`s many distinct files; unbounded growth is
-accepted for v0.x (mirrors that memo's own acceptance of the range being
-merely "negligible collision risk", not infinite). `alloc_id()` returns
-`nil, err` if the range is exhausted; `show()` propagates that as a normal
-`nil, err_msg` failure. Placement ids draw from the full unsigned 32-bit
-`p=` space rather than a bounded pool (see "Placement id allocation" in
-`renderer.lua`), so they have no equivalent exhaustion case in practice.
+An idle entry otherwise stays cached — id and terminal-side pixel data both
+— so a later `show()` of the same file is cheap. Two narrow eviction cases
+give that up; see "Eviction" below. Placement ids draw from the full
+unsigned 32-bit `p=` space rather than a bounded pool (see "Placement id
+allocation" in `renderer.lua`), so they have no exhaustion case in practice.
+
+### Eviction (issue #11)
+
+Evicting an idle entry writes `a=d,d=I,i=<id>` (frees the terminal-side
+pixel data along with any placement), returns the id to the pool, and drops
+the entry. A key whose entry list becomes empty is removed from the cache
+table itself, so the Lua-side tables do not grow with dead keys. Only idle
+entries (`active_placements == 0`) are ever evicted — an entry with a live
+placement is never touched.
+
+1. **Superseded mtime, at `show()` time.** The cache key includes the
+   file's mtime, so once a file is rewritten its previous entries can no
+   longer be hit by any lookup: `show()` only ever computes the key for the
+   mtime currently on disk. Before its cache lookup, `show()` therefore
+   evicts every idle entry recorded for the same path under a *different*
+   key (found via `keys_by_path`, a path → live-keys index, not a cache
+   scan). This is the realistic growth case: a caller that regenerates the
+   same PNG repeatedly (a live preview) would otherwise leak one id and one
+   image's worth of terminal-side pixel data per regeneration. An older
+   entry that is still displayed is left alone; it is evicted by the first
+   `show()` of that path after it goes idle, or by case 2.
+2. **Id pool exhaustion, LRU.** When `alloc_id()` finds no free id in the
+   reserved range (65,536 ids, `docs/spec/kitty-graphics.md`), the
+   least-recently-used idle entry is evicted and the allocation retried.
+   "Used" is a logical clock stamped on an entry by every `show()` that
+   registers or reuses it and by every `destroy_handle` that releases it.
+   Eviction is deliberately *not* eager (no idle-entry cap): the warm cache
+   is the common-case win, and a smaller cap was rejected without evidence
+   it is needed. If every id is held by an active entry, `show()` still
+   fails with `nil, err_msg` as before. `retransmit_and_place_group`'s
+   Ghostty re-transmit allocates through the same path.
+
+**Measurement** (per AGENTS.md's performance rules; headless Neovim, a
+synthetic cache holding all 65,536 ids as idle entries): Lua heap 31.5 MB
+(~504 bytes/entry), `alloc_id()`'s full-range probe on a miss 0.26 ms, the
+LRU victim scan over every entry 2.2 ms. The scan runs only on exhaustion
+and stays well inside one frame, so no ordered LRU index is maintained on
+the `show()` hot path. Exhaustion is not reachable by showing distinct
+static files in practice; regenerating one file every 2 s reaches it in
+about 36 hours without case 1, which is why case 1 exists and case 2 is
+only the backstop.
+
+Delete retries still queued for an evicted id (see "Lifecycle") are left
+running rather than cancelled: they are what covers a terminal dropping the
+delete of a just-cleared placement (issue #27), and they stay harmless if
+the id is handed out again because placement ids are never reused. If the
+terminal drops the `d=I` itself, the pixel data lingers under an id blit
+considers free until that id is reused — a fresh `a=T` under the same id
+replaces it.
+
+**Not covered**: idle entries still cached when Neovim exits. `VimLeavePre`
+is registered only while handles exist and its handler walks live handles,
+so an entry left idle by `clear()`/`clear_all()` keeps its terminal-side
+data until the terminal itself discards it (issue #57).
 
 **Ghostty exception: idle entries recorded against a stale terminal size
 are evicted eagerly, at reuse time.** Ghostty discards previously-
