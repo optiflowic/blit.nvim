@@ -262,6 +262,23 @@ them.
   battle-tested of the three supported terminals. `docs/manual-testing.md`
   should weight Ghostty checks accordingly before any release.
 
+Error responses under `q=1`, observed on Neovim 0.12.5 by transmitting a
+PNG with a valid signature and IHDR but a corrupt IDAT (`a=T`), then
+letting the next redraw pass re-place it (`a=p`):
+
+| terminal | answer to the transmit | answer to the later `a=p` |
+|---|---|---|
+| kitty 0.48.2 | `EBADPNG:IDAT: incorrect header check` | `ENOENT:Put command refers to image with id: <id> that could not load its data` |
+| Ghostty 1.3.1 | `EINVAL: invalid data` | `ENOENT: image not found` |
+| WezTerm 20260716-195552-76b606ec | none | none |
+
+So the error code and text are terminal-specific (blit records the message
+verbatim and never matches on it), and WezTerm reports nothing for this
+case: on WezTerm a rejected PNG stays invisible to `:checkhealth blit`,
+exactly as on Neovim 0.10 / 0.11. On all three, show + scroll + split
+with a valid PNG produced no response at all (no `OK` under `q=1`, no
+error) and nothing leaked into Neovim's input.
+
 ## Source
 
 This memo is derived from the upstream [kitty graphics protocol

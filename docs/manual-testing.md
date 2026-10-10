@@ -79,9 +79,11 @@ WezTerm (and Ghostty when available) before tagging a release.
       typing still works normally (no stray characters inserted) and
       `:checkhealth blit` lists no "terminal rejected image" error.
 - [ ] (Neovim >= 0.12) `show()` a file with a valid PNG signature and IHDR
-      but corrupt image data: no image appears, and `:checkhealth blit`
-      (run while the handle is still shown) lists a "terminal rejected
-      image" error naming that file.
+      but corrupt image data: no image appears, and on kitty and Ghostty
+      `:checkhealth blit` lists a timestamped "terminal rejected image"
+      error naming that file. WezTerm sends no error response for this
+      case, so nothing is listed there (see
+      `docs/spec/kitty-graphics.md`'s "Per-terminal quirks").
 
 ## WezTerm
 

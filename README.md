@@ -24,6 +24,7 @@ No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 Run `:checkhealth blit` to see detection results for your environment. On
 Neovim >= 0.12 it also lists any error the terminal sent back for an image
 (e.g. a PNG it rejected); on 0.10 / 0.11 those errors are not available.
+WezTerm sends no such error for a rejected PNG, so none is listed there.
 
 ## Install
 
