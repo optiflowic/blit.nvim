@@ -1364,7 +1364,10 @@ T["response_errors"]["supported: transmits with q=1 and records an error respons
 
   deliver_response(ESC .. "_Gi=" .. handle.id .. ";EBADPNG:bad data")
 
-  MiniTest.expect.equality(renderer.response_errors(), {
+  local errors = renderer.response_errors()
+  MiniTest.expect.equality(type(errors[1].time), "number")
+  errors[1].time = nil
+  MiniTest.expect.equality(errors, {
     { id = handle.id, path = tmp_path, message = "EBADPNG:bad data" },
   })
 end

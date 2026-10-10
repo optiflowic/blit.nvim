@@ -151,6 +151,11 @@ T["build_placement"]["minimal"] = function()
   MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",p=3" .. ESC .. "\\")
 end
 
+T["build_placement"]["quiet adds q right after the placement id"] = function()
+  local seq = terminal.build_placement(ID, { placement_id = 3, quiet = 1, columns = 10, rows = 5 })
+  MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",p=3,q=1,c=10,r=5" .. ESC .. "\\")
+end
+
 T["build_placement"]["requires a positive integer placement_id"] = function()
   local ok = pcall(terminal.build_placement, ID, {})
   MiniTest.expect.equality(ok, false)

@@ -22,6 +22,7 @@ local APC_END = ESC .. "\\"
 ---@field crop_y? integer source rectangle pixel offset from the transmitted image's top edge
 ---@field crop_w? integer source rectangle pixel width
 ---@field crop_h? integer source rectangle pixel height
+---@field quiet? 1|2 `q=` for a standalone `a=p` (build_placement only); omitted = no `q` key
 
 ---@class blit.terminal.TransmitOpts
 ---@field id integer
@@ -189,8 +190,18 @@ function M.build_placement(id, opts)
     id = { id, M.is_valid_id, "a valid id in blit's reserved range" },
     opts = { opts, "table" },
     placement_id = { opts.placement_id, is_positive_integer, "a positive integer" },
+    quiet = {
+      opts.quiet,
+      function(v)
+        return v == nil or v == 1 or v == 2
+      end,
+      "1, 2, or nil",
+    },
   })
   local parts = { { "a", "p" }, { "i", id }, { "p", opts.placement_id } }
+  if opts.quiet then
+    parts[#parts + 1] = { "q", opts.quiet }
+  end
   append_placement_parts(parts, opts)
   return APC_START .. build_control(parts) .. APC_END
 end
@@ -263,6 +274,8 @@ function M.parse_response(sequence)
 end
 
 -- Whether this Neovim delivers APC responses through TermResponse (0.12+).
+-- Assumes a released 0.12.0 or later: `has("nvim-0.12")` is also true on
+-- 0.12 pre-release builds that predate the APC support.
 -- Older versions only deliver OSC/DCS, so blit keeps every response
 -- suppressed there — see docs/spec/kitty-graphics.md's "Response handling".
 ---@param has? fun(feature: string): integer

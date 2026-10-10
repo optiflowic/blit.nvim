@@ -40,6 +40,14 @@ function M.check()
     vim.health.warn(WEZTERM_CRASH_WARNING)
   end
 
+  if not caps.supported then
+    vim.health.warn(
+      REASON_MESSAGES[caps.reason] or ("blit is unsupported: " .. tostring(caps.reason))
+    )
+    return
+  end
+  vim.health.ok("blit is supported in this environment")
+
   if terminal.has_response_support() then
     vim.health.ok("Terminal error responses are reported here (Neovim >= 0.12)")
   else
@@ -48,19 +56,12 @@ function M.check()
 
   for _, response_error in ipairs(renderer.response_errors()) do
     vim.health.error(
-      ("terminal rejected image id %d (%s): %s"):format(
+      ("[%s] terminal rejected image id %d (%s): %s"):format(
+        os.date("%H:%M:%S", response_error.time),
         response_error.id,
         response_error.path or "no longer displayed",
         response_error.message
       )
-    )
-  end
-
-  if caps.supported then
-    vim.health.ok("blit is supported in this environment")
-  else
-    vim.health.warn(
-      REASON_MESSAGES[caps.reason] or ("blit is unsupported: " .. tostring(caps.reason))
     )
   end
 end

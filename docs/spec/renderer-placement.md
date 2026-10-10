@@ -489,10 +489,12 @@ it is an error (`ok == false`) for an id blit currently owns (`used_ids`);
 `OK` responses, foreign ids, and unrelated OSC/DCS responses are ignored.
 
 Recorded errors live in a bounded list (the most recent 20, oldest
-dropped first) of `{ id, placement_id?, path?, message }`; `path` comes
-from a live handle using that id and is nil once none does.
+dropped first) of `{ id, placement_id?, path?, message, time }`; `path`
+comes from a live handle using that id and is nil once none does, and
+`time` is the `os.time()` the response arrived at.
 `renderer.response_errors()` returns a copy, and `:checkhealth blit`
-prints each entry. The list is never cleared during a session — it is a
+prints each entry prefixed with that time, so an old entry can be told
+apart from a current one. The list is never cleared during a session — it is a
 diagnostic log, not handle state — and recording an error changes nothing
 about the handle, its extmark, or the transmission cache.
 

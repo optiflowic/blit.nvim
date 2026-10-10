@@ -80,6 +80,7 @@ local MAX_RESPONSE_ERRORS = 20
 ---@field placement_id? integer
 ---@field path? string nil when no live handle references the id anymore
 ---@field message string the terminal's `<CODE>:<text>` error string
+---@field time integer `os.time()` when the response arrived
 
 ---@type blit.ResponseError[]
 local response_errors = {}
@@ -631,6 +632,21 @@ local function placement_opts(handle, placement)
   }
 end
 
+-- Options for a standalone `a=p`: with a response listener in place, `q=1`
+-- drops the per-placement `OK` (one TermResponse per re-placed handle on
+-- every redraw pass) while keeping errors. Without one the bytes stay as
+-- they always were (no `q` key).
+---@param handle blit.Handle
+---@param placement blit.PlacementResult
+---@return blit.terminal.PlacementOpts
+local function standalone_placement_opts(handle, placement)
+  local opts = placement_opts(handle, placement)
+  if M._has_response_support_fn() then
+    opts.quiet = 1
+  end
+  return opts
+end
+
 ---@param handle blit.Handle
 ---@param placement blit.PlacementResult
 ---@return boolean ok
@@ -639,7 +655,7 @@ local function place_existing(handle, placement)
   local sequences = {
     terminal.build_save_cursor(),
     terminal.build_move_cursor(placement.screen_row, placement.screen_col),
-    terminal.build_placement(handle.id, placement_opts(handle, placement)),
+    terminal.build_placement(handle.id, standalone_placement_opts(handle, placement)),
     terminal.build_restore_cursor(),
   }
   local ok, err = M._write_fn(sequences)
@@ -785,7 +801,7 @@ local function retransmit_and_place_group(handles)
       vim.list_extend(sequences, {
         terminal.build_save_cursor(),
         terminal.build_move_cursor(placements[h].screen_row, placements[h].screen_col),
-        terminal.build_placement(new_id, placement_opts(h, placements[h])),
+        terminal.build_placement(new_id, standalone_placement_opts(h, placements[h])),
         terminal.build_restore_cursor(),
       })
     end
@@ -1168,6 +1184,7 @@ local function record_response_error(sequence)
     placement_id = response.placement_id,
     path = path_for_id(response.id),
     message = response.message,
+    time = os.time(),
   })
   if #response_errors > MAX_RESPONSE_ERRORS then
     table.remove(response_errors, 1)

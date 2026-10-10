@@ -27,7 +27,7 @@ Every command is an APC (Application Program Command) escape sequence:
 | `f` | pixel format | `100` (PNG) — only format blit ever sends, per the PNG-only v0.x constraint |
 | `t` | transmission medium | `d` (direct, i.e. the payload is in the escape code itself) — blit never uses file-based (`t=f`) or shared-memory transmission, to avoid any filesystem/IPC surface beyond reading the source PNG |
 | `i` | image id | one of blit's reserved range, see below |
-| `q` | quiet | on transmits (`a=T`/`a=t`) only: `1` (suppress `OK`, keep errors) when responses can be received, else `2` (suppress everything) — see "Response handling" below |
+| `q` | quiet | when responses can be received: `1` (suppress `OK`, keep errors) on transmits (`a=T`/`a=t`) and standalone placements (`a=p`). Otherwise `2` (suppress everything) on transmits and no `q` key on placements. Never on deletes — see "Response handling" below |
 | `m` | more chunks | `1` (more chunks follow) / `0` (last chunk) |
 | `p` | placement id | a per-handle id, distinct across every concurrently-live placement — see "Placement" below |
 | `c`, `r` | placement columns/rows | shrink to the visible cell span when a placement is partially clipped, see "Source-rectangle cropping" below |
@@ -223,14 +223,26 @@ range.
   terminal-side transmission error stays invisible unless it shows up as a
   rendering problem.
 
-Placement (`a=p`) and delete (`a=d`) commands carry no `q` key on any
-version, so the terminal's default applies and it may answer a placement
-with `OK` or an error. These bytes have always been emitted this way,
-and no answer has been observed leaking into Neovim's input as
-keystrokes on any supported version (`docs/manual-testing.md` checks
-this). On 0.12+ the same listener records the error ones, which
-surfaces e.g. an `ENOENT` for a placement against an id whose pixel data
-the terminal has dropped.
+Standalone placement (`a=p`) commands follow the same split, with one
+difference on old versions:
+
+- **Neovim >= 0.12**: `a=p` carries `q=1`. Without it the terminal may
+  acknowledge every re-placement with an `OK`, i.e. one `TermResponse`
+  (for blit's listener and every other plugin's) per re-placed handle on
+  every redraw pass, only to be discarded. Error answers still come back
+  and the same listener records them, which surfaces e.g. an `ENOENT` for
+  a placement against an id whose pixel data the terminal has dropped.
+- **Neovim 0.10 / 0.11**: `a=p` carries no `q` key, so the terminal's
+  default applies and it may answer with `OK` or an error. These bytes
+  have always been emitted this way, and no answer has been observed
+  leaking into Neovim's input as keystrokes (`docs/manual-testing.md`
+  checks this).
+
+Delete (`a=d`) commands carry no `q` key on any version.
+
+`has_response_support()` is a version check (`has("nvim-0.12")`), so it
+assumes a released 0.12.0 or later; 0.12 pre-release builds that predate
+the APC `TermResponse` support are not accounted for.
 
 Responses are diagnostic only. They arrive asynchronously, after `show()`
 has returned, so they cannot become a `nil, err` return value, and no
