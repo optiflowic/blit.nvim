@@ -151,6 +151,11 @@ T["build_placement"]["minimal"] = function()
   MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",p=3" .. ESC .. "\\")
 end
 
+T["build_placement"]["quiet adds q right after the placement id"] = function()
+  local seq = terminal.build_placement(ID, { placement_id = 3, quiet = 1, columns = 10, rows = 5 })
+  MiniTest.expect.equality(seq, ESC .. "_Ga=p,i=" .. ID .. ",p=3,q=1,c=10,r=5" .. ESC .. "\\")
+end
+
 T["build_placement"]["requires a positive integer placement_id"] = function()
   local ok = pcall(terminal.build_placement, ID, {})
   MiniTest.expect.equality(ok, false)
@@ -259,6 +264,56 @@ T["is_valid_id"]["rejects non-integer and non-number input"] = function()
   MiniTest.expect.equality(terminal.is_valid_id(terminal.ID_RANGE_START + 0.5), false)
   MiniTest.expect.equality(terminal.is_valid_id("123"), false)
   MiniTest.expect.equality(terminal.is_valid_id(nil), false)
+end
+
+T["parse_response"] = MiniTest.new_set()
+
+T["parse_response"]["error response, as TermResponse delivers it (no ST)"] = function()
+  local response = terminal.parse_response(ESC .. "_Gi=" .. ID .. ";EBADPNG:bad data")
+  MiniTest.expect.equality(
+    response,
+    { id = ID, placement_id = nil, ok = false, message = "EBADPNG:bad data" }
+  )
+end
+
+T["parse_response"]["OK response with a placement id and trailing ST"] = function()
+  local response = terminal.parse_response(ESC .. "_Gi=" .. ID .. ",p=7;OK" .. ESC .. "\\")
+  MiniTest.expect.equality(response, { id = ID, placement_id = 7, ok = true, message = "OK" })
+end
+
+T["parse_response"]["message containing a semicolon is kept whole"] = function()
+  local response = terminal.parse_response(ESC .. "_Gi=" .. ID .. ";EINVAL:a;b")
+  MiniTest.expect.equality(response.message, "EINVAL:a;b")
+end
+
+T["parse_response"]["ignores ids outside blit's reserved range"] = function()
+  MiniTest.expect.equality(terminal.parse_response(ESC .. "_Gi=1;ENOENT:x"), nil)
+  MiniTest.expect.equality(terminal.parse_response(ESC .. "_GI=3;ENOENT:x"), nil)
+end
+
+T["parse_response"]["ignores non-graphics and malformed sequences"] = function()
+  MiniTest.expect.equality(terminal.parse_response(ESC .. "]11;rgb:0000/0000/0000"), nil)
+  MiniTest.expect.equality(terminal.parse_response(ESC .. "_Gi=" .. ID), nil)
+  MiniTest.expect.equality(terminal.parse_response(""), nil)
+  MiniTest.expect.equality(terminal.parse_response(nil), nil)
+end
+
+T["has_response_support"] = MiniTest.new_set()
+
+T["has_response_support"]["true only when nvim-0.12 is available"] = function()
+  local asked
+  local supported = terminal.has_response_support(function(feature)
+    asked = feature
+    return 1
+  end)
+  MiniTest.expect.equality(supported, true)
+  MiniTest.expect.equality(asked, "nvim-0.12")
+  MiniTest.expect.equality(
+    terminal.has_response_support(function()
+      return 0
+    end),
+    false
+  )
 end
 
 return T

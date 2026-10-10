@@ -27,7 +27,7 @@ Every command is an APC (Application Program Command) escape sequence:
 | `f` | pixel format | `100` (PNG) — only format blit ever sends, per the PNG-only v0.x constraint |
 | `t` | transmission medium | `d` (direct, i.e. the payload is in the escape code itself) — blit never uses file-based (`t=f`) or shared-memory transmission, to avoid any filesystem/IPC surface beyond reading the source PNG |
 | `i` | image id | one of blit's reserved range, see below |
-| `q` | quiet | `2` (suppress all responses) always, see "Response handling" below |
+| `q` | quiet | when responses can be received: `1` (suppress `OK`, keep errors) on transmits (`a=T`/`a=t`) and standalone placements (`a=p`). Otherwise `2` (suppress everything) on transmits and no `q` key on placements. Never on deletes — see "Response handling" below |
 | `m` | more chunks | `1` (more chunks follow) / `0` (last chunk) |
 | `p` | placement id | a per-handle id, distinct across every concurrently-live placement — see "Placement" below |
 | `c`, `r` | placement columns/rows | shrink to the visible cell span when a placement is partially clipped, see "Source-rectangle cropping" below |
@@ -199,16 +199,55 @@ facts; the stateful counter that actually hands out ids from this range is
 
 ## Response handling
 
-blit always sets `q=2` (suppress all responses — no `OK` and no error
-response is sent back by the terminal). This is a deliberate v0.x
-limitation: blit does not read stdin asynchronously to parse protocol
-responses, so any response bytes that did arrive would otherwise leak into
-Neovim's normal input stream. The consequence is that blit cannot currently
-detect terminal-side transmission errors (e.g. malformed PNG rejected by the
-terminal) — failures are only visible if they cause a visible rendering
-problem. Revisiting this (async stdin reader surfacing errors through
-`:checkhealth` or return values) is a future-version consideration, not
-implemented speculatively here.
+The terminal answers a graphics command that carries an `i=` with an APC
+of its own: `ESC _ G i=<id>[,p=<placement id>] ; <message> ESC \`, where
+`<message>` is `OK` or `<CODE>:<text>` (e.g. `EBADPNG:...`, `ENOENT:...`).
+The `q` key controls which of these are sent: `q=1` suppresses `OK`, `q=2`
+suppresses errors too.
+
+blit never reads stdin itself — Neovim's TUI owns it, and a second reader
+would race it for input bytes. The only safe channel is Neovim's own
+`TermResponse` event, which delivers APC responses from Neovim 0.12 onward
+(0.10/0.11 deliver OSC/DCS only). The sequence arrives as
+`ESC _ G <control> ; <message>` with the terminating ST already stripped.
+`terminal.has_response_support()` reports whether that channel exists, and
+`terminal.parse_response()` decodes one sequence, returning nil for
+anything that is not a graphics response about an id in blit's reserved
+range.
+
+- **Neovim >= 0.12**: transmits carry `q=1`, so only error responses come
+  back. `renderer.lua` records them (see
+  `docs/spec/renderer-placement.md`'s "Terminal error responses") and
+  `:checkhealth blit` lists them.
+- **Neovim 0.10 / 0.11**: transmits carry `q=2`, exactly as before; a
+  terminal-side transmission error stays invisible unless it shows up as a
+  rendering problem.
+
+Standalone placement (`a=p`) commands follow the same split, with one
+difference on old versions:
+
+- **Neovim >= 0.12**: `a=p` carries `q=1`. Without it the terminal may
+  acknowledge every re-placement with an `OK`, i.e. one `TermResponse`
+  (for blit's listener and every other plugin's) per re-placed handle on
+  every redraw pass, only to be discarded. Error answers still come back
+  and the same listener records them, which surfaces e.g. an `ENOENT` for
+  a placement against an id whose pixel data the terminal has dropped.
+- **Neovim 0.10 / 0.11**: `a=p` carries no `q` key, so the terminal's
+  default applies and it may answer with `OK` or an error. These bytes
+  have always been emitted this way, and no answer has been observed
+  leaking into Neovim's input as keystrokes (`docs/manual-testing.md`
+  checks this).
+
+Delete (`a=d`) commands carry no `q` key on any version.
+
+`has_response_support()` is a version check (`has("nvim-0.12")`), so it
+assumes a released 0.12.0 or later; 0.12 pre-release builds that predate
+the APC `TermResponse` support are not accounted for.
+
+Responses are diagnostic only. They arrive asynchronously, after `show()`
+has returned, so they cannot become a `nil, err` return value, and no
+recovery path (Ghostty retransmit, delete retries) waits on or reacts to
+them.
 
 ## Per-terminal quirks
 
@@ -222,6 +261,23 @@ implemented speculatively here.
 - **Ghostty**: assumed spec-compliant for the subset above; least
   battle-tested of the three supported terminals. `docs/manual-testing.md`
   should weight Ghostty checks accordingly before any release.
+
+Error responses under `q=1`, observed on Neovim 0.12.5 by transmitting a
+PNG with a valid signature and IHDR but a corrupt IDAT (`a=T`), then
+letting the next redraw pass re-place it (`a=p`):
+
+| terminal | answer to the transmit | answer to the later `a=p` |
+|---|---|---|
+| kitty 0.48.2 | `EBADPNG:IDAT: incorrect header check` | `ENOENT:Put command refers to image with id: <id> that could not load its data` |
+| Ghostty 1.3.1 | `EINVAL: invalid data` | `ENOENT: image not found` |
+| WezTerm 20260716-195552-76b606ec | none | none |
+
+So the error code and text are terminal-specific (blit records the message
+verbatim and never matches on it), and WezTerm reports nothing for this
+case: on WezTerm a rejected PNG stays invisible to `:checkhealth blit`,
+exactly as on Neovim 0.10 / 0.11. On all three, show + scroll + split
+with a valid PNG produced no response at all (no `OK` under `q=1`, no
+error) and nothing leaked into Neovim's input.
 
 ## Source
 

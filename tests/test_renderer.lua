@@ -1341,4 +1341,83 @@ T["redraw"]["non-ghostty: never retransmits a still-visible handle after a resiz
   MiniTest.expect.equality(first_all:find("a=p", 1, true) ~= nil, true)
 end
 
+T["response_errors"] = MiniTest.new_set()
+
+---@param sequence string
+local function deliver_response(sequence)
+  vim.api.nvim_exec_autocmds("TermResponse", { group = "blit", data = { sequence = sequence } })
+end
+
+---@param supported boolean
+---@return blit.Handle
+local function show_with_response_support(supported)
+  renderer._has_response_support_fn = function()
+    return supported
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  return renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2, col = 0 })
+end
+
+T["response_errors"]["supported: transmits with q=1 and records an error response"] = function()
+  local handle = show_with_response_support(true)
+  MiniTest.expect.equality(table.concat(captured[1], ""):find(",q=1,", 1, true) ~= nil, true)
+
+  deliver_response(ESC .. "_Gi=" .. handle.id .. ";EBADPNG:bad data")
+
+  local errors = renderer.response_errors()
+  MiniTest.expect.equality(type(errors[1].time), "number")
+  errors[1].time = nil
+  MiniTest.expect.equality(errors, {
+    { id = handle.id, path = tmp_path, message = "EBADPNG:bad data" },
+  })
+end
+
+T["response_errors"]["ignores OK, unowned ids, and unrelated sequences"] = function()
+  local handle = show_with_response_support(true)
+
+  deliver_response(ESC .. "_Gi=" .. handle.id .. ",p=" .. handle.placement_id .. ";OK")
+  deliver_response(ESC .. "_Gi=" .. (handle.id + 1) .. ";ENOENT:not ours")
+  deliver_response(ESC .. "]11;rgb:0000/0000/0000")
+
+  MiniTest.expect.equality(renderer.response_errors(), {})
+end
+
+T["response_errors"]["keeps only the most recent errors"] = function()
+  local handle = show_with_response_support(true)
+
+  for n = 1, 25 do
+    deliver_response(ESC .. "_Gi=" .. handle.id .. ";EINVAL:" .. n)
+  end
+
+  local errors = renderer.response_errors()
+  MiniTest.expect.equality(#errors, 20)
+  MiniTest.expect.equality(errors[1].message, "EINVAL:6")
+  MiniTest.expect.equality(errors[20].message, "EINVAL:25")
+end
+
+T["response_errors"]["unsupported: transmits with q=2 and never listens"] = function()
+  show_with_response_support(false)
+
+  MiniTest.expect.equality(table.concat(captured[1], ""):find(",q=2,", 1, true) ~= nil, true)
+  MiniTest.expect.equality(
+    #vim.api.nvim_get_autocmds({ group = "blit", event = "TermResponse" }),
+    0
+  )
+end
+
+T["response_errors"]["listener is torn down with the last handle"] = function()
+  local handle = show_with_response_support(true)
+  MiniTest.expect.equality(
+    #vim.api.nvim_get_autocmds({ group = "blit", event = "TermResponse" }),
+    1
+  )
+
+  renderer.clear(handle)
+  vim.wait(200, function()
+    return not pcall(vim.api.nvim_get_autocmds, { group = "blit" })
+  end)
+
+  MiniTest.expect.equality(pcall(vim.api.nvim_get_autocmds, { group = "blit" }), false)
+end
+
 return T

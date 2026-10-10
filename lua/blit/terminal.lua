@@ -22,6 +22,7 @@ local APC_END = ESC .. "\\"
 ---@field crop_y? integer source rectangle pixel offset from the transmitted image's top edge
 ---@field crop_w? integer source rectangle pixel width
 ---@field crop_h? integer source rectangle pixel height
+---@field quiet? 1|2 `q=` for a standalone `a=p` (build_placement only); omitted = no `q` key
 
 ---@class blit.terminal.TransmitOpts
 ---@field id integer
@@ -189,8 +190,18 @@ function M.build_placement(id, opts)
     id = { id, M.is_valid_id, "a valid id in blit's reserved range" },
     opts = { opts, "table" },
     placement_id = { opts.placement_id, is_positive_integer, "a positive integer" },
+    quiet = {
+      opts.quiet,
+      function(v)
+        return v == nil or v == 1 or v == 2
+      end,
+      "1, 2, or nil",
+    },
   })
   local parts = { { "a", "p" }, { "i", id }, { "p", opts.placement_id } }
+  if opts.quiet then
+    parts[#parts + 1] = { "q", opts.quiet }
+  end
   append_placement_parts(parts, opts)
   return APC_START .. build_control(parts) .. APC_END
 end
@@ -221,6 +232,57 @@ function M.build_delete(id, opts)
     parts[#parts + 1] = { "p", opts.placement_id }
   end
   return APC_START .. build_control(parts) .. APC_END
+end
+
+-- Response parsing (pure, no I/O) ---------------------------------------------
+-- See docs/spec/kitty-graphics.md's "Response handling" section.
+
+---@class blit.terminal.Response
+---@field id integer
+---@field placement_id? integer
+---@field ok boolean
+---@field message string `OK`, or the terminal's `<CODE>:<text>` error string
+
+-- Parses one kitty graphics protocol response as Neovim's TermResponse
+-- event delivers it: `ESC _ G <control> ; <message>`, with the trailing ST
+-- already stripped (tolerated here anyway). Returns nil for anything that
+-- is not a graphics response about an id in blit's reserved range, so a
+-- caller can feed it every TermResponse sequence unfiltered.
+---@param sequence any
+---@return blit.terminal.Response?
+function M.parse_response(sequence)
+  if type(sequence) ~= "string" or sequence:sub(1, #APC_START) ~= APC_START then
+    return nil
+  end
+  local body = sequence:sub(#APC_START + 1)
+  if body:sub(-#APC_END) == APC_END then
+    body = body:sub(1, -#APC_END - 1)
+  end
+  local separator = body:find(";", 1, true)
+  if not separator then
+    return nil
+  end
+  local keys = {}
+  for key, value in body:sub(1, separator - 1):gmatch("(%a)=(%d+)") do
+    keys[key] = tonumber(value)
+  end
+  if not M.is_valid_id(keys.i) then
+    return nil
+  end
+  local message = body:sub(separator + 1)
+  return { id = keys.i, placement_id = keys.p, ok = message == "OK", message = message }
+end
+
+-- Whether this Neovim delivers APC responses through TermResponse (0.12+).
+-- Assumes a released 0.12.0 or later: `has("nvim-0.12")` is also true on
+-- 0.12 pre-release builds that predate the APC support.
+-- Older versions only deliver OSC/DCS, so blit keeps every response
+-- suppressed there — see docs/spec/kitty-graphics.md's "Response handling".
+---@param has? fun(feature: string): integer
+---@return boolean
+function M.has_response_support(has)
+  has = has or vim.fn.has
+  return has("nvim-0.12") == 1
 end
 
 -- Cursor positioning ----------------------------------------------------------

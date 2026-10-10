@@ -10,9 +10,9 @@ rather than re-deriving detection logic ad hoc.
 blit must never emit escape sequences to a terminal that won't understand
 them (garbage on screen, or worse, sequences interpreted as something
 else). Detection is env-var based — no runtime protocol query (`a=q`) is
-used, since that would require asynchronously reading stdin for the
-terminal's response, which blit does not do in v0.x (see the "Response
-handling" section of `docs/spec/kitty-graphics.md`).
+used: a query answer can only be received through Neovim's `TermResponse`
+event on Neovim >= 0.12 (see the "Response handling" section of
+`docs/spec/kitty-graphics.md`), and detection must work on 0.10 as well.
 
 ## Detection matrix
 
@@ -143,6 +143,7 @@ to consume the whole buffer in one call regardless of blocking mode, so
 
 DA1 (`\x1b[c`) or XTGETTCAP queries could provide a stronger capability
 check than env vars alone, but require reading a terminal response
-asynchronously — the same complexity blit avoids for protocol responses in
-general (see `docs/spec/kitty-graphics.md`). Out of scope until a measured
-need (real-world false detection reports) justifies the added complexity.
+asynchronously. The `TermResponse` channel blit uses for graphics error
+responses (see `docs/spec/kitty-graphics.md`) could carry these too, on
+Neovim >= 0.12 only. Out of scope until a measured need (real-world false
+detection reports) justifies the added complexity.

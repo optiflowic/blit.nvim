@@ -21,7 +21,10 @@ No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 - tmux is explicitly unsupported in v0.x (blit no-ops under tmux)
 - GUI frontends / `--embed` (e.g. Neovide) are unsupported (blit no-ops)
 
-Run `:checkhealth blit` to see detection results for your environment.
+Run `:checkhealth blit` to see detection results for your environment. On
+Neovim >= 0.12 it also lists any error the terminal sent back for an image
+(e.g. a PNG it rejected); on 0.10 / 0.11 those errors are not available.
+WezTerm sends no such error for a rejected PNG, so none is listed there.
 
 ## Install
 
@@ -89,6 +92,10 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
   documented as an anchor byte column and silently ignored; it is now
   validated as a non-negative integer, so a negative or fractional `col`
   that used to be accepted raises an argument error.
+- On Neovim >= 0.12, error responses from the terminal (e.g. a rejected
+  PNG) are recorded and listed by `:checkhealth blit`
+  ([#12](https://github.com/optiflowic/blit.nvim/issues/12)). Neovim 0.10 /
+  0.11 behave as before.
 
 ### v0.2.0 (2026-08-08)
 

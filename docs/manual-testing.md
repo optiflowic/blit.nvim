@@ -75,6 +75,15 @@ WezTerm (and Ghostty when available) before tagging a release.
       original tab restores it (issue #16).
 - [ ] Quitting Neovim (`:qa`) leaves no stray image on screen after exit.
 - [ ] `:checkhealth blit` reports this terminal as supported.
+- [ ] (Neovim >= 0.12) After normal use — show, scroll, resize, clear —
+      typing still works normally (no stray characters inserted) and
+      `:checkhealth blit` lists no "terminal rejected image" error.
+- [ ] (Neovim >= 0.12) `show()` a file with a valid PNG signature and IHDR
+      but corrupt image data: no image appears, and on kitty and Ghostty
+      `:checkhealth blit` lists a timestamped "terminal rejected image"
+      error naming that file. WezTerm sends no error response for this
+      case, so nothing is listed there (see
+      `docs/spec/kitty-graphics.md`'s "Per-terminal quirks").
 
 ## WezTerm
 
