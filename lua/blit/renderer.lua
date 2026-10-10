@@ -105,9 +105,14 @@ end
 
 -- Image id allocation ---------------------------------------------------------
 -- Pure logic over terminal.lua's reserved range. Ids are handed out
--- sequentially and only returned to the free pool by destroy_handle's
--- free_data path (VimLeavePre, clear/clear_all's full teardown) or _reset().
--- See docs/spec/renderer-placement.md's "Transmission cache" section.
+-- sequentially and returned to the free pool by destroy_handle's free_data
+-- path (VimLeavePre, a fatal show() failure), the transmission cache's
+-- eviction paths (see "Eviction" below), or _reset(). See
+-- docs/spec/renderer-placement.md's "Transmission cache" section.
+
+-- Overridable seam for tests: lets the exhaustion path be exercised without
+-- allocating all 65,536 ids of the real reserved range.
+M._id_range_end = terminal.ID_RANGE_END
 
 local next_id = terminal.ID_RANGE_START
 local used_ids = {}
@@ -115,11 +120,11 @@ local used_ids = {}
 ---@return integer? id
 ---@return string? err
 local function alloc_id()
-  local range_size = terminal.ID_RANGE_END - terminal.ID_RANGE_START + 1
+  local range_size = M._id_range_end - terminal.ID_RANGE_START + 1
   for _ = 1, range_size do
     local id = next_id
     next_id = next_id + 1
-    if next_id > terminal.ID_RANGE_END then
+    if next_id > M._id_range_end then
       next_id = terminal.ID_RANGE_START
     end
     if not used_ids[id] then
@@ -157,8 +162,33 @@ end
 
 -- Transmission cache ----------------------------------------------------------
 
----@type table<string, { id: integer, active_placements: integer, lines: integer, columns: integer, native_width: integer, native_height: integer }[]>
+---@class blit.CacheEntry
+---@field id integer
+---@field path string
+---@field active_placements integer live handles referencing {id}; 0 = idle
+---@field last_used integer `use_clock` value at this entry's latest show()/clear()
+---@field lines integer
+---@field columns integer
+---@field native_width integer
+---@field native_height integer
+
+---@type table<string, blit.CacheEntry[]>
 local cache = {}
+
+-- Every cache key currently holding at least one entry, grouped by path, so
+-- show() can find a path's superseded (older-mtime) entries without
+-- scanning the whole cache. See "Eviction" below.
+---@type table<string, table<string, true>>
+local keys_by_path = {}
+
+-- Logical clock for least-recently-used ordering; never wall time.
+local use_clock = 0
+
+---@param entry blit.CacheEntry
+local function touch_entry(entry)
+  use_clock = use_clock + 1
+  entry.last_used = use_clock
+end
 
 ---@param path string
 ---@param mtime { sec: integer, nsec: integer }
@@ -237,6 +267,34 @@ local function cancel_pending_delete(id)
   end
 end
 
+-- Removes {id}'s entry from {key}'s list, forgetting the key itself (and its
+-- keys_by_path slot) once that list is empty so neither table grows with
+-- keys that no longer hold anything.
+---@param key string
+---@param id integer
+local function drop_cache_entry(key, id)
+  local entries = cache[key]
+  if not entries then
+    return
+  end
+  for i, entry in ipairs(entries) do
+    if entry.id == id then
+      table.remove(entries, i)
+      if #entries == 0 then
+        cache[key] = nil
+        local keys = keys_by_path[entry.path]
+        if keys then
+          keys[key] = nil
+          if next(keys) == nil then
+            keys_by_path[entry.path] = nil
+          end
+        end
+      end
+      return
+    end
+  end
+end
+
 -- Finds an existing cache entry this key's next show() can reuse instead of
 -- transmitting fresh pixel data — either an IDLE entry (no handle currently
 -- references its id) or, failing that, an ACTIVE one to fan out onto (issue
@@ -253,7 +311,7 @@ end
 -- "retransmit_and_place_group" below).
 ---@param key string
 ---@param terminal_name "kitty"|"wezterm"|"ghostty"|nil
----@return { id: integer, active_placements: integer, lines: integer, columns: integer, native_width: integer, native_height: integer }?
+---@return blit.CacheEntry?
 local function find_reusable_entry(key, terminal_name)
   local entries = cache[key]
   if not entries then
@@ -269,7 +327,7 @@ local function find_reusable_entry(key, terminal_name)
       and (entry.lines ~= vim.o.lines or entry.columns ~= vim.o.columns)
     then
       free_id(entry.id)
-      table.remove(entries, i)
+      drop_cache_entry(key, entry.id)
     else
       -- The id may still have bounded delete retries outstanding from a
       -- prior destroy (see "Destroy-path delete retry queue" above); this
@@ -287,14 +345,20 @@ local function find_reusable_entry(key, terminal_name)
 end
 
 ---@param key string
+---@param path string
 ---@param id integer
 ---@param native_width integer
 ---@param native_height integer
-local function register_cache_entry(key, id, native_width, native_height)
+local function register_cache_entry(key, path, id, native_width, native_height)
   cache[key] = cache[key] or {}
+  keys_by_path[path] = keys_by_path[path] or {}
+  keys_by_path[path][key] = true
+  use_clock = use_clock + 1
   table.insert(cache[key], {
     id = id,
+    path = path,
     active_placements = 1,
+    last_used = use_clock,
     lines = vim.o.lines,
     columns = vim.o.columns,
     native_width = native_width,
@@ -304,7 +368,7 @@ end
 
 ---@param key string
 ---@param id integer
----@return { id: integer, active_placements: integer, lines: integer, columns: integer, native_width: integer, native_height: integer }?
+---@return blit.CacheEntry?
 local function find_cache_entry(key, id)
   local entries = cache[key]
   if not entries then
@@ -318,19 +382,82 @@ local function find_cache_entry(key, id)
   return nil
 end
 
+-- Eviction ----------------------------------------------------------------
+-- An idle entry is normally kept warm so re-showing the same file is a
+-- placement only. Two cases give that up, both freeing the terminal-side
+-- pixel data (`d=I`), the id, and the cache slot together — see
+-- docs/spec/renderer-placement.md's "Eviction" section (issue #11):
+--
+-- 1. Superseded mtime: once show() sees {path} at a new mtime, idle entries
+--    recorded against any other mtime of that path can no longer be hit by
+--    a cache lookup, so keeping them only leaks.
+-- 2. Id pool exhaustion: alloc_image_id() evicts the least-recently-used
+--    idle entry rather than failing show() while reclaimable ids exist.
+--
+-- Any delete retries still queued for the id (see "Destroy-path delete
+-- retry queue" above) are deliberately left running: they are what covers
+-- a terminal dropping the delete of a just-cleared placement (issue #27),
+-- and stay harmless even if the id is handed out again, since placement
+-- ids are never reused.
+
 ---@param key string
----@param id integer
-local function drop_cache_entry(key, id)
-  local entries = cache[key]
-  if not entries then
+---@param entry blit.CacheEntry
+local function evict_idle_entry(key, entry)
+  M._write_fn({ terminal.build_delete(entry.id, { free_data = true }) })
+  free_id(entry.id)
+  drop_cache_entry(key, entry.id)
+end
+
+---@param path string
+---@param current_key string
+local function evict_superseded_entries(path, current_key)
+  local keys = keys_by_path[path]
+  if not keys then
     return
   end
-  for i, entry in ipairs(entries) do
-    if entry.id == id then
-      table.remove(entries, i)
-      return
+  for key in pairs(keys) do
+    local entries = key ~= current_key and cache[key] or {}
+    for i = #entries, 1, -1 do
+      if entries[i].active_placements == 0 then
+        evict_idle_entry(key, entries[i])
+      end
     end
   end
+end
+
+-- A full scan, but only ever reached with the id pool exhausted: measured
+-- at ~2.2ms for 65,536 idle entries (plus ~0.26ms for alloc_id's own
+-- full-range probe), well inside one frame, so no ordered index is kept on
+-- the hot path for it.
+---@return boolean evicted
+local function evict_least_recently_used_idle_entry()
+  local victim_key, victim
+  for key, entries in pairs(cache) do
+    for _, entry in ipairs(entries) do
+      local is_older = not victim or entry.last_used < victim.last_used
+      if entry.active_placements == 0 and is_older then
+        victim_key, victim = key, entry
+      end
+    end
+  end
+  if not victim then
+    return false
+  end
+  evict_idle_entry(victim_key, victim)
+  return true
+end
+
+---@return integer? id
+---@return string? err
+local function alloc_image_id()
+  local id, err = alloc_id()
+  if id then
+    return id
+  end
+  if not evict_least_recently_used_idle_entry() then
+    return nil, err
+  end
+  return alloc_id()
 end
 
 -- Geometry ----------------------------------------------------------------
@@ -748,7 +875,7 @@ local function retransmit_and_place_group(handles)
     return false
   end
 
-  local new_id = alloc_id()
+  local new_id = alloc_image_id()
   if not new_id then
     for _, h in ipairs(handles) do
       hide_existing(h)
@@ -811,7 +938,13 @@ local function retransmit_and_place_group(handles)
   if ok then
     drop_cache_entry(first.cache_key, old_id)
     free_id(old_id)
-    register_cache_entry(first.cache_key, new_id, first.native_width, first.native_height)
+    register_cache_entry(
+      first.cache_key,
+      first.path,
+      new_id,
+      first.native_width,
+      first.native_height
+    )
     local new_entry = find_cache_entry(first.cache_key, new_id)
     new_entry.active_placements = #handles
     for _, h in ipairs(handles) do
@@ -1067,6 +1200,7 @@ local function destroy_handle(handle, opts)
   local remaining = entry and math.max(0, entry.active_placements - 1) or 0
   if entry then
     entry.active_placements = remaining
+    touch_entry(entry)
   end
 
   if free_data_requested and remaining <= 0 then
@@ -1385,6 +1519,7 @@ function M.show(path, opts)
   debounce_ms = opts.debounce_ms or debounce_ms
 
   local key = cache_key(path, stat.mtime)
+  evict_superseded_entries(path, key)
   -- Either an idle entry (ordinary re-show of a cleared handle) or an
   -- active one (issue #10 fan-out: a second, concurrent placement of the
   -- same already-live id) — either way, no re-transmission needed.
@@ -1397,6 +1532,7 @@ function M.show(path, opts)
     native_height = entry.native_height
     needs_transmit = false
     entry.active_placements = entry.active_placements + 1
+    touch_entry(entry)
   else
     local read_err
     bytes, read_err = read_file(path)
@@ -1413,13 +1549,13 @@ function M.show(path, opts)
       return nil, dims_err
     end
     local alloc_err
-    id, alloc_err = alloc_id()
+    id, alloc_err = alloc_image_id()
     if not id then
       return nil, alloc_err
     end
     native_width = dims.width
     native_height = dims.height
-    register_cache_entry(key, id, native_width, native_height)
+    register_cache_entry(key, path, id, native_width, native_height)
     needs_transmit = true
   end
 
@@ -1545,7 +1681,10 @@ function M._reset()
   pending_deletes = {}
   maybe_teardown_autocmds()
   cache = {}
+  keys_by_path = {}
+  use_clock = 0
   used_ids = {}
+  M._id_range_end = terminal.ID_RANGE_END
   next_id = terminal.ID_RANGE_START
   next_placement_id = 1
   response_errors = {}

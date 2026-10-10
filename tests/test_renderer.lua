@@ -1420,4 +1420,175 @@ T["response_errors"]["listener is torn down with the last handle"] = function()
   MiniTest.expect.equality(pcall(vim.api.nvim_get_autocmds, { group = "blit" }), false)
 end
 
+T["eviction"] = MiniTest.new_set()
+
+---@return string
+local function all_captured()
+  local parts = {}
+  for _, sequences in ipairs(captured) do
+    parts[#parts + 1] = table.concat(sequences, "")
+  end
+  return table.concat(parts, "")
+end
+
+---@param id integer
+---@return boolean
+local function freed_data_for(id)
+  return all_captured():find("a=d,d=I,i=" .. id .. ESC, 1, true) ~= nil
+end
+
+-- Rewrites tmp_path's mtime so its cache key changes, as a regenerated file
+-- would.
+---@param offset_sec integer
+local function bump_mtime(offset_sec)
+  local stat = vim.uv.fs_stat(tmp_path)
+  vim.uv.fs_utime(tmp_path, stat.atime.sec, stat.mtime.sec + offset_sec)
+end
+
+---@param count integer
+---@return string[]
+local function make_extra_png_files(count)
+  local paths = {}
+  for i = 1, count do
+    paths[i] = vim.fn.tempname() .. ".png"
+    local f = io.open(paths[i], "wb")
+    f:write(png_bytes())
+    f:close()
+  end
+  return paths
+end
+
+---@param paths string[]
+local function remove_files(paths)
+  for _, path in ipairs(paths) do
+    os.remove(path)
+  end
+end
+
+T["eviction"]["superseded mtime: frees the idle entry of the older mtime (issue #11)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local opts = { width = 5, height = 3, buf = buf, win = win, lnum = 2 }
+
+  local first = renderer.show(tmp_path, opts)
+  renderer.clear(first)
+  bump_mtime(10)
+
+  captured = {}
+  local second = renderer.show(tmp_path, opts)
+
+  MiniTest.expect.equality(freed_data_for(first.id), true)
+  MiniTest.expect.equality(all_captured():find("a=T", 1, true) ~= nil, true)
+  MiniTest.expect.equality(second.visible, true)
+end
+
+T["eviction"]["superseded mtime: the freed id is handed out again"] = function()
+  renderer._id_range_end = require("blit.terminal").ID_RANGE_START
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local opts = { width = 5, height = 3, buf = buf, win = win, lnum = 2 }
+
+  local first = renderer.show(tmp_path, opts)
+  renderer.clear(first)
+  bump_mtime(10)
+
+  local second = renderer.show(tmp_path, opts)
+  MiniTest.expect.equality(second.id, first.id)
+end
+
+T["eviction"]["unchanged mtime: idle entry stays warm, nothing freed"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local opts = { width = 5, height = 3, buf = buf, win = win, lnum = 2 }
+
+  local first = renderer.show(tmp_path, opts)
+  renderer.clear(first)
+
+  captured = {}
+  renderer.show(tmp_path, opts)
+
+  MiniTest.expect.equality(all_captured():find("d=I", 1, true), nil)
+end
+
+T["eviction"]["superseded mtime: a still-displayed older entry is left alone until idle"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local old = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  bump_mtime(10)
+
+  captured = {}
+  local new = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 6 })
+  MiniTest.expect.equality(new.id ~= old.id, true)
+  MiniTest.expect.equality(all_captured():find("d=I", 1, true), nil)
+
+  renderer.clear(old)
+  captured = {}
+  local again = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(freed_data_for(old.id), true)
+  MiniTest.expect.equality(again.id, new.id)
+end
+
+T["eviction"]["exhausted id pool: evicts the least-recently-used idle entry (issue #11)"] = function()
+  renderer._id_range_end = require("blit.terminal").ID_RANGE_START + 1
+  local paths = make_extra_png_files(3)
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local opts = { width = 5, height = 3, buf = buf, win = win, lnum = 2 }
+
+  local a = renderer.show(paths[1], opts)
+  local b = renderer.show(paths[2], opts)
+  -- b goes idle before a, so b is the least recently used of the two.
+  renderer.clear(b)
+  renderer.clear(a)
+
+  captured = {}
+  local c = renderer.show(paths[3], opts)
+
+  MiniTest.expect.equality(freed_data_for(b.id), true)
+  MiniTest.expect.equality(freed_data_for(a.id), false)
+  MiniTest.expect.equality(c.id, b.id)
+
+  captured = {}
+  renderer.clear(c)
+  local a_again = renderer.show(paths[1], opts)
+  MiniTest.expect.equality(a_again.id, a.id)
+  MiniTest.expect.equality(all_captured():find("a=T", 1, true), nil)
+
+  remove_files(paths)
+end
+
+T["eviction"]["exhausted id pool: never evicts an active entry, show() fails instead"] = function()
+  renderer._id_range_end = require("blit.terminal").ID_RANGE_START + 1
+  local paths = make_extra_png_files(3)
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  renderer.show(paths[1], { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  renderer.show(paths[2], { width = 5, height = 3, buf = buf, win = win, lnum = 6 })
+
+  captured = {}
+  local handle, err =
+    renderer.show(paths[3], { width = 5, height = 3, buf = buf, win = win, lnum = 8 })
+
+  MiniTest.expect.equality(handle, nil)
+  MiniTest.expect.equality(err, "blit.renderer: no free image ids left in reserved range")
+  MiniTest.expect.equality(all_captured():find("d=I", 1, true), nil)
+  MiniTest.expect.equality(#renderer._handles, 2)
+
+  remove_files(paths)
+end
+
+T["eviction"]["pool with free ids left: idle entries are never evicted"] = function()
+  renderer._id_range_end = require("blit.terminal").ID_RANGE_START + 2
+  local paths = make_extra_png_files(3)
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local opts = { width = 5, height = 3, buf = buf, win = win, lnum = 2 }
+
+  renderer.clear(renderer.show(paths[1], opts))
+  renderer.clear(renderer.show(paths[2], opts))
+
+  captured = {}
+  renderer.show(paths[3], opts)
+
+  MiniTest.expect.equality(all_captured():find("d=I", 1, true), nil)
+
+  remove_files(paths)
+end
+
 return T
