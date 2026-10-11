@@ -17,15 +17,30 @@ local schedule = vim.schedule
 vim.schedule = function(step)
   steps[#steps + 1] = step
 end
-MiniTest.run()
+local collected, collect_err = pcall(MiniTest.run)
 vim.schedule = schedule
+
+-- An error outside a case body (collection, a reporter callback) would
+-- otherwise leave headless Neovim running with nothing left to quit it.
+---@param err any
+local function abort(err)
+  print("tests/run.lua: " .. tostring(err))
+  vim.cmd("cquit 1")
+end
+
+if not collected then
+  abort(collect_err)
+end
 
 local function run_next_step()
   local step = table.remove(steps, 1)
   if not step then
     return
   end
-  step()
+  local ok, err = pcall(step)
+  if not ok then
+    abort(err)
+  end
   schedule(run_next_step)
 end
 
