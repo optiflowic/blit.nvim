@@ -11,7 +11,7 @@ $(MINI_NVIM):
 
 .PHONY: test
 test: $(MINI_NVIM)
-	nvim --headless --noplugin -u tests/minimal_init.lua -c "lua MiniTest.run()"
+	nvim --headless --noplugin -u tests/minimal_init.lua -c "luafile tests/run.lua"
 
 .PHONY: format
 format:
