@@ -5,6 +5,25 @@ geometry, config validation, terminal detection). Actual pixel output is
 terminal-dependent and not testable in CI — run this checklist on kitty and
 WezTerm (and Ghostty when available) before tagging a release.
 
+## Automated checks (`make e2e`)
+
+`make e2e` runs `scripts/e2e/scenario.lua` in kitty, WezTerm and Ghostty
+(macOS only; limit with `make e2e E2E_TERMINALS=ghostty`) and checks the
+screen through screenshots. The terminal you start it from needs Screen
+Recording and Accessibility permissions. It covers: basic placement, `col`
+offset (#9), cropping at the top, bottom and right edges and back
+(#23, #28), `clear()` with no further redraw (#27), the same image twice
+(#10), tab switch (#16), buffer switch, window close, resizing the terminal
+window (#24, #34), `:checkhealth blit`, and nothing left after `:qa`.
+
+A larger copy of the image shown first (`calibrate`) is used to measure
+cell size and the screen origin, so every later check depends on it being
+placed right. Glance at that first image once per terminal.
+
+Still checked by hand: the items below that `make e2e` does not cover,
+including the WezTerm crash (#31), typing after use (Neovim >= 0.12), and
+the corrupt PNG error response.
+
 ## Setup
 
 - [ ] Have a small PNG file on disk and a scratch buffer open.

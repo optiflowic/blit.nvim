@@ -174,4 +174,4 @@ the memo, fix the memo in the same PR.
 - tmux passthrough, sixel, ueberzugpp backends
 - Non-PNG decoding, ImageMagick/ffmpeg integration
 - Markdown/filetype integration (belongs to a separate plugin built on top)
-- Async image downloads from URLs Async image downloads from URLs
+- Async image downloads from URLs

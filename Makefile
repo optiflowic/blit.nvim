@@ -24,3 +24,10 @@ format-check:
 .PHONY: lint
 lint:
 	selene .
+
+# Real-terminal checks (macOS). See docs/manual-testing.md.
+E2E_TERMINALS ?= kitty wezterm ghostty
+
+.PHONY: e2e
+e2e:
+	@status=0; for t in $(E2E_TERMINALS); do scripts/e2e/run.sh $$t || status=1; done; exit $$status
