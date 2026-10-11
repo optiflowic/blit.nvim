@@ -111,3 +111,6 @@ tags
 
 # mini.test dev-time-only dependency (never a runtime one, see Makefile)
 /deps/
+
+# scripts/e2e/run.sh output (kept only when a check fails)
+/.e2e/
