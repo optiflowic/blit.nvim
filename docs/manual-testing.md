@@ -52,6 +52,10 @@ the corrupt PNG error response.
       offset. Repeat with a `col` large enough that the image overhangs
       the window's right edge: the visible part must be a clean
       column-cropped slice, not stretched or wrapped onto the next row.
+- [ ] Show a square PNG with `{ width = 40, height = 4 }`: the image fills
+      the whole 40x4 box, visibly stretched, with no background bars at the
+      left/right or top/bottom (`docs/spec/kitty-graphics.md`,
+      "Source-rectangle cropping").
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
 - [ ] `show()` a PNG, `clear()` it, overwrite the file at the same path
