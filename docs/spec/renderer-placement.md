@@ -358,6 +358,10 @@ give that up; see "Eviction" below. Placement ids draw from the full
 unsigned 32-bit `p=` space rather than a bounded pool (see "Placement id
 allocation" in `renderer.lua`), so they have no exhaustion case in practice.
 
+The terminal may also drop an idle entry's data on its own: its storage
+quota evicts images without placements first — see
+`docs/spec/kitty-graphics.md`'s Transmission section.
+
 ### Eviction (issue #11)
 
 Evicting an idle entry writes `a=d,d=I,i=<id>` (frees the terminal-side

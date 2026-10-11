@@ -43,13 +43,25 @@ Every command is an APC (Application Program Command) escape sequence:
   blit never decodes pixel data itself.
 - Medium is always `t=d` (direct/inline). The full PNG file is base64-encoded
   and split into chunks of at most **4096 bytes of base64 text** each.
+  Upstream also requires every chunk except the last to have a size that is
+  a multiple of 4; 4096 satisfies that, and so must any other chunk size
+  passed to `chunk_base64`.
 - The **first** chunk's control data carries every key needed for the
-  transmission (`a`, `f`, `t`, `i`, `q`, plus `m` if more chunks follow).
+  transmission (`a`, `f`, `t`, `i`, `q`, plus `m`).
 - **Every subsequent chunk's control data carries only the `m` key** — no
   other key is repeated. This matches the upstream protocol's chunking
   examples and keeps escape codes minimal.
 - The last chunk has `m=0` (explicit, not omitted — this is what
   `terminal.lua`'s golden-string tests assert byte-exactly).
+- Transmitting data for an id that already exists replaces that image: the
+  terminal deletes the existing image and all of its placements, and the new
+  data is not displayed until a placement is created for it.
+- The terminal keeps image data under a storage quota (320MB per buffer in
+  kitty). When a new image would exceed it, older images are deleted, and
+  images without any placement go first. An id blit still holds in its cache
+  with no live placement can therefore lose its data on the terminal side;
+  a later `a=p` against it is answered with `ENOENT` (see "Response
+  handling" below) and draws nothing.
 
 ## Placement
 
@@ -113,37 +125,35 @@ clip-amount math (`compute_clip`) and the pixel-space conversion
   for a non-nil value (`if opts.crop_x then` — Lua's `0` is truthy, so this
   correctly still emits `x=0`), not `> 0`, so a genuine `0` offset is never
   dropped.
-- **Assumed, pending manual verification** (see `docs/manual-testing.md`):
-  omitting one axis's pair (`x=`/`w=` or `y=`/`h=`) while sending the
-  other's is expected to make the terminal default the omitted axis to the
-  full, unclipped image span (offset `0`, size = native width/height) —
-  i.e. kitty/WezTerm/Ghostty fill in the missing `x`/`w` (or `y`/`h`) as if
-  the whole image were requested on that axis, rather than leaving it at a
-  stale or zero size. Unverified on a real terminal as of this writing (only
-  exercised in headless Neovim, which never talks to a real terminal). If a
-  real terminal instead defaults an omitted axis to something other than
-  the full image span, the fix is to always emit all four keys explicitly
-  once any axis is clipped (defaulting the unclipped axis's `x`/`y` to `0`
-  and `w`/`h` to `native_width`/`native_height`) — a small, contained change
-  to `compute_placement`/`placement_opts` in `lua/blit/renderer.lua`, not a
-  redesign.
+- Omitting one axis's pair (`x=`/`w=` or `y=`/`h=`) while sending the
+  other's leaves the omitted axis at the full image span: upstream defaults
+  `x`/`y` to `0` and `w`/`h` to the whole width/height. `make e2e`
+  (`docs/manual-testing.md`, "Automated checks") checks single-axis crops at
+  the top, bottom and right edges on kitty, WezTerm and Ghostty.
 - `c=`/`r=` shrink to the visible cell span (not the placement's original
   full `width`/`height`) whenever the corresponding axis is cropped, so the
   cropped slice renders at the correct on-screen size instead of being
   stretched to fill the original box.
-- **Assumed, pending manual verification** (see `docs/manual-testing.md`):
-  re-issuing `a=p` with no `x=`/`y=`/`w=`/`h=` at all (the placement having
-  previously been cropped, now fully back in view) is expected to reset the
-  placement to showing the complete, uncropped image — i.e. the terminal
-  does not remember a prior call's crop rectangle across placement commands,
-  the same way `c=`/`r=`/`z=` are already treated as fully-specified-per-call
-  rather than incrementally patched. Unverified on a real kitty/WezTerm/
-  Ghostty terminal as of this writing (only exercised in headless Neovim,
-  which never talks to a real terminal). If a real terminal instead retains
-  the last explicit crop rectangle, the fix is to always emit the full
-  rectangle explicitly (`x=0,y=0,w=native_width,h=native_height`) once a
-  handle has ever been cropped, rather than omitting it — a small, contained
-  change to `placement_opts` in `lua/blit/renderer.lua`, not a redesign.
+- With both `c=` and `r=` given (blit always sends both), the source
+  rectangle is scaled to fill the cell box on each axis independently, with
+  no aspect-ratio correction: a `width`/`height` that does not match the
+  image's aspect ratio stretches it. Read from source, not from the upstream
+  docs: kitty 0.48.2 through 0.49.2 (`grman_update_layers` in
+  `kitty/graphics.c`), Ghostty 1.3.1 (`Placement.calculatedSize` in
+  `src/terminal/kitty/graphics_storage.zig`) and WezTerm main
+  (`assign_image_to_cells` in `term/src/terminalstate/image.rs`). The
+  upstream docs say (since kitty-docs 05444e9e61, 2026-08-23) that an image
+  with both keys is letterboxed/pillarboxed; in kitty that code path exists
+  only for Unicode-placeholder (`U=1`) placements, which blit does not use
+  (see "Unicode placeholders" below). The sentence is worded generally, so
+  `/spec-check` should re-check this whenever the `nr`/`nc` branch of
+  `grman_update_layers` changes; `docs/manual-testing.md` has a step for it.
+- Re-issuing `a=p` with no `x=`/`y=`/`w=`/`h=` at all (the placement having
+  previously been cropped, now fully back in view) shows the complete,
+  uncropped image again: a placement sent with the same image id and
+  placement id replaces the earlier one as a whole, so no crop rectangle
+  carries over. `make e2e` checks this ("uncrop after scrolling back") on
+  kitty, WezTerm and Ghostty.
 - This only affects `a=p`/`a=T`'s placement sub-table; it never causes a
   re-transmit (`a=T` with fresh pixel data) on its own — `renderer.lua`'s
   `redraw_all` still only ever repositions (`a=p`) or hides (`a=d`) on a
@@ -178,6 +188,11 @@ encoding row/column/image-id). blit does not use this in v0.x — it exists
 for terminal-multiplexer/scrollback-friendly placement, which is out of
 scope while tmux is explicitly unsupported. Documented here so a future v2
 revisiting tmux support doesn't have to rediscover this from scratch.
+
+Placeholder placements also size differently: with both `c` and `r` they
+fit the image into the box with its aspect ratio preserved, whereas the
+cursor-positioned placements blit uses fill the box (see
+"Source-rectangle cropping" above).
 
 ## Reserved image ID range
 
@@ -285,3 +300,9 @@ This memo is derived from the upstream [kitty graphics protocol
 documentation](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 Implementation code cites this memo; it should not need to re-read the
 upstream docs for anything already covered above.
+
+Pins for `/spec-check` (what upstream looked like when this memo was last
+compared against it):
+
+- Last verified: 2026-10-12
+- kitty-docs: 87ab3e98f4 / kitty: f78106e296 / wezterm: 6c7e3722b1 / ghostty: 1de05f1a78
