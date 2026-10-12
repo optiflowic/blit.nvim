@@ -489,10 +489,23 @@ this path beyond a naive "re-`a=T`, same id" attempt:
   tuned via repeated manual testing) via `schedule_ghostty_retransmit()`.
   Only once that timer actually fires — meaning no further `WinResized`
   restarted it in the meantime — does `ghostty_retransmit_pass()` re-check
-  every handle and retransmit whichever are still stale. The cheap
-  `a=p`/`a=d` reposition/hide in `redraw_all()`'s normal per-pass loop
-  keeps running unthrottled throughout the drag, same as ever; only the
-  expensive retransmit is deferred.
+  every handle and retransmit whichever are still stale.
+- **A stale handle gets no `a=p` while it waits for that retransmit
+  (issue #61).** Its id has no data behind it any more, so an `a=p` draws
+  nothing and Ghostty answers it with `ENOENT: image not found`. On Neovim
+  >= 0.12 that answer was recorded (see "Terminal error responses" below)
+  and stayed in `:checkhealth blit` for the rest of the session, although
+  the retransmit restores the image a moment later. So for a handle that
+  is `ghostty_entry_stale()`, `redraw_all()` only (re)starts the settle
+  timer and writes no placement, and `show()` skips the `a=p` when it fans
+  out onto an active entry that is stale (the redraw pass it schedules
+  right after starts the settle timer). The handle's `visible` field is
+  left as it was until the retransmit pass sets it. Hiding (`a=d`) a
+  handle with no current placement is unchanged, and so is every pass for
+  a handle that is not stale. If Ghostty did keep the data across some
+  size change, the cost is that the image stays at its previous screen
+  position until the settle timer fires, instead of following each
+  intermediate size.
 
 This is a deliberate, narrow exception to AGENTS.md's "never re-transmit
 pixel data on scroll/resize" performance rule: the settle timer only ever
@@ -551,6 +564,12 @@ apart from a current one. The list is never cleared during a session — it is a
 diagnostic log, not handle state — and recording an error changes nothing
 about the handle, its extmark, or the transmission cache.
 
+The list is meant to hold errors blit did not expect. The one error blit
+could predict — `ENOENT` for an `a=p` against an id Ghostty dropped on a
+window resize — is avoided at the source rather than filtered here: no
+`a=p` is sent for such an id (see the Ghostty exception in "Transmission
+cache" above).
+
 The listener belongs to the handle-gated augroup, so it is removed with
 the last handle like every other autocmd (no listener while idle). An
 error that arrives after that teardown is not recorded.
@@ -590,7 +609,8 @@ Two distinct kinds of state transition, kept separate:
   already-`handle.visible = false` handle to retry the delete (issue #23).
   `redraw_all()` therefore reissues `a=d` unconditionally whenever
   `compute_placement` reports invisible, mirroring how the visible branch
-  already reissues `a=p` every pass regardless of prior state. This is
+  already reissues `a=p` every pass regardless of prior state (except for
+  a stale Ghostty handle, see "Transmission cache" above). This is
   self-healing rather than a root-cause fix for WezTerm's lag — blit cannot
   detect whether a given `a=d` actually took effect (`q=2` suppresses all
   terminal responses, see `docs/spec/kitty-graphics.md`'s "Response
