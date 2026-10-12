@@ -192,3 +192,7 @@ the corrupt PNG error response.
       partway through a single continuous drag. Repeat the resize a second
       and third time in a row without any other input in between — it must
       keep recovering every time, not just the first.
+- [ ] (Neovim >= 0.12) After the drag-resizes above, and after a second
+      `show()` of the same file made right after one more resize while the
+      first image is still visible, `:checkhealth blit` lists no "terminal
+      rejected image" error (issue #61).

@@ -609,7 +609,8 @@ Two distinct kinds of state transition, kept separate:
   already-`handle.visible = false` handle to retry the delete (issue #23).
   `redraw_all()` therefore reissues `a=d` unconditionally whenever
   `compute_placement` reports invisible, mirroring how the visible branch
-  already reissues `a=p` every pass regardless of prior state. This is
+  already reissues `a=p` every pass regardless of prior state (except for
+  a stale Ghostty handle, see "Transmission cache" above). This is
   self-healing rather than a root-cause fix for WezTerm's lag — blit cannot
   detect whether a given `a=d` actually took effect (`q=2` suppresses all
   terminal responses, see `docs/spec/kitty-graphics.md`'s "Response

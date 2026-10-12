@@ -1127,7 +1127,8 @@ local function redraw_all()
       -- there is no other path back to a correct screen state since redraw
       -- passes are the only place hide is triggered (issue #23). This is
       -- the same "reissue every pass regardless of prior state" treatment
-      -- place_existing already gets on the visible branch above, and is
+      -- place_existing already gets on the visible branch above (a stale
+      -- Ghostty handle aside), and is
       -- equally cheap: no pixel payload, escape-sequence bytes only.
       hide_existing(handle)
     end
