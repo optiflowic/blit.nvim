@@ -970,9 +970,10 @@ end
 -- image came back on some redraw passes and not others, seemingly a race in
 -- Ghostty's own rendering pipeline under rapid successive placement commands
 -- for the same region rather than anything blit's escape-sequence content
--- gets wrong. Repositioning/hiding (`a=p`/`a=d`) every pass during the
--- drag is still cheap and stays on the normal per-pass debounce above; only
--- the expensive retransmit is pushed onto its own longer, separately-reset
+-- gets wrong. Hiding (`a=d`) every pass during the drag is still cheap and
+-- stays on the normal per-pass debounce above; a stale handle gets no
+-- `a=p` meanwhile (issue #61, see redraw_all), and the expensive retransmit
+-- is pushed onto its own longer, separately-reset
 -- timer so it fires (at most) once the resize has actually stopped for
 -- `M._ghostty_settle_ms`, rather than once per intermediate size. 100ms was
 -- confirmed via repeated manual testing on a real Ghostty window to be long
@@ -1108,7 +1109,10 @@ local function redraw_all()
     local placement = compute_placement(handle)
     if placement then
       if ghostty_entry_stale(handle, caps.terminal) then
-        place_existing(handle, placement)
+        -- No `a=p` for a stale id: Ghostty has dropped its data, so the
+        -- placement would draw nothing and only come back as an ENOENT
+        -- error response (issue #61). The settle-timer pass places the
+        -- handle under its fresh id.
         schedule_ghostty_retransmit()
       else
         place_existing(handle, placement)
@@ -1623,7 +1627,10 @@ function M.show(path, opts)
       return nil, err
     end
     handle.visible = placement ~= nil
-  elseif placement then
+  elseif placement and not ghostty_entry_stale(handle, caps.terminal) then
+    -- A stale active entry (fan-out onto an id Ghostty dropped on a resize)
+    -- gets no `a=p` here either (issue #61): the redraw pass scheduled below
+    -- starts the settle timer, which places this handle under a fresh id.
     local ok, err = place_existing(handle, placement)
     if not ok then
       destroy_handle(handle, { free_data = true })

@@ -1177,6 +1177,90 @@ T["redraw"]["ghostty: retransmits a still-visible handle after a terminal resize
   MiniTest.expect.equality(any_captured_has("a=T"), true)
 end
 
+-- Sequences captured so far that place (`a=p`) the given image id.
+---@param id integer
+---@return integer
+local function count_placements_of(id)
+  local count = 0
+  for _, seq in ipairs(captured) do
+    local all = table.concat(seq, "")
+    if all:find("a=p,i=" .. id .. ",", 1, true) then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+T["redraw"]["ghostty: sends no a=p for a stale id while its retransmit is pending (issue #61)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  -- Long enough for several debounced redraw passes to run before the
+  -- settle timer fires.
+  renderer._ghostty_settle_ms = 60
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local handle = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(handle.visible, true)
+  local original_id = handle.id
+
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+  vim.wait(20)
+  vim.api.nvim_exec_autocmds("WinResized", { pattern = tostring(win) })
+
+  vim.wait(1000, function()
+    return any_captured_has("a=T")
+  end)
+  vim.o.columns = original_columns
+
+  -- Ghostty answers an a=p against the id it dropped with ENOENT, which
+  -- the TermResponse listener would record; the handle must only ever be
+  -- placed by the retransmit, under its fresh id.
+  MiniTest.expect.equality(count_placements_of(original_id), 0)
+  MiniTest.expect.equality(any_captured_has("a=T"), true)
+  MiniTest.expect.no_equality(handle.id, original_id)
+  MiniTest.expect.equality(handle.visible, true)
+end
+
+T["redraw"]["ghostty: fan-out onto a stale active id sends no a=p before the retransmit (issue #61)"] = function()
+  renderer._detect_fn = function()
+    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+  end
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local first = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 2, debounce_ms = 5 }
+  )
+  local original_id = first.id
+
+  -- The terminal size changes, and before any redraw pass has noticed, a
+  -- second show() of the same file fans out onto the now-stale id.
+  local original_columns = vim.o.columns
+  vim.o.columns = original_columns + 1
+  captured = {}
+  local second = renderer.show(
+    tmp_path,
+    { width = 5, height = 3, buf = buf, win = win, lnum = 4, debounce_ms = 5 }
+  )
+  MiniTest.expect.equality(second.id, original_id)
+
+  vim.wait(1000, function()
+    return any_captured_has("a=T")
+  end)
+  vim.o.columns = original_columns
+
+  MiniTest.expect.equality(count_placements_of(original_id), 0)
+  MiniTest.expect.no_equality(first.id, original_id)
+  MiniTest.expect.equality(first.id, second.id)
+  MiniTest.expect.equality(first.visible, true)
+  MiniTest.expect.equality(second.visible, true)
+end
+
 T["redraw"]["ghostty: retries a failed retransmit without a further resize event (issue #37)"] = function()
   renderer._detect_fn = function()
     return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
