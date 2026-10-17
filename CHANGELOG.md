@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v0.2.0...blit.nvim-v1.0.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* opts.col is now a 0-indexed display-cell offset from the window's text-area left edge, not an anchor byte column, and is validated as a non-negative integer. A negative or fractional col that was previously accepted (and ignored) now raises an argument error.
+
+### Features
+
+* evict superseded and least-recently-used idle cache entries ([#11](https://github.com/optiflowic/blit.nvim/issues/11)) ([#58](https://github.com/optiflowic/blit.nvim/issues/58)) ([0a5400e](https://github.com/optiflowic/blit.nvim/commit/0a5400e278c04e26fa3e8cfa00ee972912691364))
+* position placements horizontally via a col cell offset ([#55](https://github.com/optiflowic/blit.nvim/issues/55)) ([b048f17](https://github.com/optiflowic/blit.nvim/commit/b048f17862027b1434266768bd85e38840124d66))
+* support multi-location placement fan-out for one transmitted image ([#51](https://github.com/optiflowic/blit.nvim/issues/51)) ([9ae8bad](https://github.com/optiflowic/blit.nvim/commit/9ae8baddf63ef59bd71eb32b1e0b7c3365e32d8a))
+* surface terminal error responses via TermResponse on Neovim &gt;= 0.12 ([#56](https://github.com/optiflowic/blit.nvim/issues/56)) ([31d0f13](https://github.com/optiflowic/blit.nvim/commit/31d0f13a80d1d355b378d43d36b27978727a1382))
+
+
+### Bug Fixes
+
+* send no a=p for an id Ghostty dropped while its retransmit is pending ([#65](https://github.com/optiflowic/blit.nvim/issues/65)) ([0bef7b2](https://github.com/optiflowic/blit.nvim/commit/0bef7b2c84b77537e2b162164e17e31ec89bf1be))
+* tear down the augroup and debounce timer after the last delete retry ([#63](https://github.com/optiflowic/blit.nvim/issues/63)) ([#66](https://github.com/optiflowic/blit.nvim/issues/66)) ([5338c8c](https://github.com/optiflowic/blit.nvim/commit/5338c8cb8616cfbefcb5ba44e52383fdbc9d04b4))
+
+
+### Miscellaneous Chores
+
+* prepare the 1.0.0 release ([#69](https://github.com/optiflowic/blit.nvim/issues/69)) ([a7f6cda](https://github.com/optiflowic/blit.nvim/commit/a7f6cda1ab93758d36dafe75cc88a4dcd2dd0224)), closes [#68](https://github.com/optiflowic/blit.nvim/issues/68)
+
 ## [0.2.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v0.1.0...blit.nvim-v0.2.0) (2026-07-25)
 
 
