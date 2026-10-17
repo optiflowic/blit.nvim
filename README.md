@@ -88,6 +88,12 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
 
 ## Changelog
 
+### Unreleased
+
+- `show()` accepts `max_width`/`max_height` instead of `width`/`height`: the
+  image is sized to fit inside that many cells at the PNG's native aspect
+  ratio ([#76](https://github.com/optiflowic/blit.nvim/issues/76)).
+
 ### v1.0.0 (2026-10-17)
 
 - The public API (`setup()`, `show()`, `clear()`, `clear_all()` and their

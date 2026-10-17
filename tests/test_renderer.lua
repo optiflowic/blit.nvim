@@ -255,6 +255,49 @@ T["resolve_cell_size"]["neither given: returns an error, no dimensions"] = funct
   MiniTest.expect.equality(type(err), "string")
 end
 
+T["fit_cell_size"] = MiniTest.new_set()
+
+-- Same 100x50 (2:1) native size and 0.5 cell aspect ratio as the
+-- resolve_cell_size tests: a width of w cells derives round(w / 4) rows, and
+-- a height of h rows derives 4h columns.
+
+T["fit_cell_size"]["max_width only: fills the width, derives the height"] = function()
+  local width, height, err = renderer.fit_cell_size(10, nil, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 10, 3, nil })
+end
+
+T["fit_cell_size"]["max_height only: fills the height, derives the width"] = function()
+  local width, height, err = renderer.fit_cell_size(nil, 4, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 16, 4, nil })
+end
+
+T["fit_cell_size"]["both, width is the tighter bound: fills the width"] = function()
+  local width, height, err = renderer.fit_cell_size(10, 5, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 10, 3, nil })
+end
+
+T["fit_cell_size"]["both, height is the tighter bound: fills the height"] = function()
+  local width, height, err = renderer.fit_cell_size(40, 4, 100, 50, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 16, 4, nil })
+end
+
+T["fit_cell_size"]["a tall image is bounded by the height"] = function()
+  local width, height, err = renderer.fit_cell_size(20, 10, 50, 100, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 10, 10, nil })
+end
+
+T["fit_cell_size"]["derived side never rounds down to zero, clamps to 1"] = function()
+  local width, height, err = renderer.fit_cell_size(10, nil, 100, 1, 0.5)
+  MiniTest.expect.equality({ width, height, err }, { 10, 1, nil })
+end
+
+T["fit_cell_size"]["neither given: returns an error, no dimensions"] = function()
+  local width, height, err = renderer.fit_cell_size(nil, nil, 100, 50, 0.5)
+  MiniTest.expect.equality(width, nil)
+  MiniTest.expect.equality(height, nil)
+  MiniTest.expect.equality(type(err), "string")
+end
+
 T["cache_key"] = MiniTest.new_set()
 
 T["cache_key"]["combines path and mtime"] = function()
@@ -466,6 +509,46 @@ T["show"]["rejects omitting both width and height"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local ok = pcall(renderer.show, tmp_path, { buf = buf, win = win, lnum = 2 })
   MiniTest.expect.equality(ok, false)
+end
+
+T["show"]["max_width/max_height: fits the PNG inside the box (issue #76)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local handle, err =
+    renderer.show(tmp_path, { max_width = 40, max_height = 4, buf = buf, win = win, lnum = 2 })
+
+  MiniTest.expect.equality(err, nil)
+  MiniTest.expect.equality(handle.geometry.cols, 16)
+  MiniTest.expect.equality(handle.geometry.rows, 4)
+end
+
+T["show"]["rejects mixing width/height with max_width/max_height (issue #76)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  for _, size in ipairs({
+    { width = 5, max_width = 10 },
+    { height = 3, max_height = 4 },
+    { width = 5, max_height = 4 },
+    { height = 3, max_width = 10 },
+  }) do
+    local ok = pcall(
+      renderer.show,
+      tmp_path,
+      vim.tbl_extend("force", size, { buf = buf, win = win, lnum = 2 })
+    )
+    MiniTest.expect.equality(ok, false)
+  end
+end
+
+T["show"]["rejects a non-positive or fractional max_width/max_height (issue #76)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  for _, size in ipairs({ { max_width = 0 }, { max_height = -1 }, { max_width = 2.5 } }) do
+    local ok = pcall(
+      renderer.show,
+      tmp_path,
+      vim.tbl_extend("force", size, { buf = buf, win = win, lnum = 2 })
+    )
+    MiniTest.expect.equality(ok, false)
+  end
 end
 
 T["show"]["width-only: derives height from the PNG's native aspect ratio (issue #8)"] = function()
