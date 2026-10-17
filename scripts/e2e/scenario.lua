@@ -12,10 +12,17 @@ local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h")
 vim.opt.runtimepath:prepend(root)
 
 local blit = require("blit")
+local renderer = require("blit.renderer")
 local terminal = require("blit.terminal")
 
 local dir = assert(os.getenv("BLIT_E2E_DIR"), "BLIT_E2E_DIR is not set")
 local fixture = dir .. "/fixture.png"
+-- Written by run.sh: the fixture with every color shifted (check.py variant 3).
+local variant = dir .. "/variant.png"
+local VARIANT = 3
+-- Written by the scenario: copies it can overwrite or corrupt.
+local swap = dir .. "/swap.png"
+local corrupt = dir .. "/corrupt.png"
 
 local IMG_COLS = 8
 local IMG_ROWS = 6
@@ -29,6 +36,8 @@ local ACK_TIMEOUT_MS = 30000
 
 local seq = 0
 local runner
+-- Every batch of escape sequences blit sent, in order (see record_writes).
+local writes = {}
 
 local function resume()
   local ok, err = coroutine.resume(runner)
@@ -122,8 +131,8 @@ local function capture(name, images, calibrate)
   })
 end
 
-local function show(lnum, col, size)
-  local handle, err = blit.show(fixture, {
+local function show(lnum, col, size, path)
+  local handle, err = blit.show(path or fixture, {
     width = size and size.cols or IMG_COLS,
     height = size and size.rows or IMG_ROWS,
     lnum = lnum,
@@ -145,16 +154,25 @@ local function set_view(topline, topfill)
   wait(SETTLE_MS)
 end
 
--- Resize the terminal window itself and wait for Neovim to see it. Fails the
--- run if the size did not change, since later checks would prove nothing.
-local function resize(dw, dh)
+-- Resize the terminal window itself, wait for Neovim to see it, then wait
+-- `settle_ms` (default SETTLE_MS * 2; 0 returns right away). Fails the run if
+-- the size did not change, since later checks would prove nothing.
+local function resize(dw, dh, settle_ms)
   local before = { vim.o.lines, vim.o.columns }
+  local function changed()
+    return before[1] ~= vim.o.lines or before[2] ~= vim.o.columns
+  end
   request({ type = "resize", dw = dw, dh = dh })
-  wait(SETTLE_MS * 2)
-  assert(
-    before[1] ~= vim.o.lines or before[2] ~= vim.o.columns,
-    "terminal size did not change after resizing its window"
-  )
+  for _ = 1, 100 do
+    if changed() then
+      break
+    end
+    wait(20)
+  end
+  assert(changed(), "terminal size did not change after resizing its window")
+  if settle_ms ~= 0 then
+    wait(settle_ms or SETTLE_MS * 2)
+  end
 end
 
 local function open_scratch()
@@ -167,6 +185,64 @@ local function open_scratch()
   end
   vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
   return vim.api.nvim_get_current_buf()
+end
+
+---@param name string
+---@param ok boolean
+---@param detail? string why it failed
+local function result(name, ok, detail)
+  local line = (ok and "PASS " or "FAIL ") .. name
+  if not ok and detail then
+    line = line .. ": " .. detail
+  end
+  request({ type = "result", line = line })
+end
+
+-- Wrap renderer._write_fn so checks can tell what blit sent, e.g. whether an
+-- image was transmitted again (a=T/a=t) or only placed (a=p).
+local function record_writes()
+  local write = renderer._write_fn
+  renderer._write_fn = function(sequences)
+    writes[#writes + 1] = table.concat(sequences)
+    return write(sequences)
+  end
+end
+
+---Number of recorded write batches after `since` that send the action.
+---@param since integer index into `writes`
+---@param action "transmit"|"place"
+local function count_writes(since, action)
+  local patterns = action == "transmit" and { "\27_Ga=T,", "\27_Ga=t," } or { "\27_Ga=p," }
+  local n = 0
+  for i = since + 1, #writes do
+    for _, pattern in ipairs(patterns) do
+      if writes[i]:find(pattern, 1, true) then
+        n = n + 1
+        break
+      end
+    end
+  end
+  return n
+end
+
+---@param from string
+---@param to string
+---@param edit? fun(data: string): string
+local function copy_file(from, to, edit)
+  local f = assert(io.open(from, "rb"))
+  local data = f:read("a")
+  f:close()
+  f = assert(io.open(to .. ".tmp", "wb"))
+  f:write(edit and edit(data) or data)
+  f:close()
+  assert(os.rename(to .. ".tmp", to))
+end
+
+-- Keeps the PNG signature and IHDR valid, so blit sends it, but breaks the
+-- zlib header of the image data, so the terminal rejects it.
+local function break_image_data(data)
+  local start = assert(data:find("IDAT", 1, true), "fixture has no IDAT chunk") + 4
+  return data:sub(1, start - 1) .. "\0\0" .. data:sub(start + 2)
 end
 
 local function check_health()
@@ -189,6 +265,7 @@ local function run()
   local caps = terminal.detect()
   assert(caps.supported, "blit is not supported here: " .. tostring(caps.reason))
   assert(caps.terminal == want, ("detected %s, expected %s"):format(caps.terminal, want))
+  record_writes()
 
   -- Let the runner find the window (and float it under a tiling WM) before
   -- any geometry is measured.
@@ -244,6 +321,56 @@ local function run()
   capture("clear one of two (#10)", { expected(win, 20) })
   clear(second)
 
+  local lower = show(12)
+  local upper = show(4)
+  capture("image above moves the one below (#18)", { expected(win, 12), expected(win, 4) })
+  clear(upper)
+  clear(lower)
+
+  local box = { cols = 40, rows = 4 }
+  handle = show(2, 0, box)
+  capture("fills a box of another aspect ratio", { expected(win, 2, 0, box) })
+  clear(handle)
+
+  handle = show(2)
+  local mark = #writes
+  set_view(60)
+  set_view(1)
+  capture("back in view after scrolling out", { expected(win, 2) })
+  result("no retransmit when scrolled back into view", count_writes(mark, "transmit") == 0)
+  clear(handle)
+  mark = #writes
+  handle = show(2)
+  result("re-show after clear() reuses the cached image", count_writes(mark, "transmit") == 0)
+  clear(handle)
+
+  copy_file(fixture, swap)
+  clear(show(2, nil, nil, swap))
+  copy_file(variant, swap)
+  handle = show(2, nil, nil, swap)
+  local overwritten = expected(win, 2)
+  overwritten.variant = VARIANT
+  capture("overwritten file shows the new image (#11)", { overwritten })
+  clear(handle)
+
+  handle = show(2)
+  vim.cmd("vsplit")
+  local left = vim.api.nvim_get_current_win()
+  wait(SETTLE_MS)
+  capture("follows its window after :vsplit", { expected(win, 2) })
+  mark = #writes
+  for _ = 1, 5 do
+    vim.cmd("vertical resize -2")
+    wait(2)
+  end
+  wait(SETTLE_MS)
+  capture("follows its window after :vertical resize", { expected(win, 2) })
+  local passes = count_writes(mark, "place")
+  result("one redraw pass per resize burst", passes == 1, passes .. " passes")
+  vim.api.nvim_win_close(left, true)
+  wait(SETTLE_MS)
+  clear(handle)
+
   handle = show(2)
   vim.cmd("tabnew")
   wait(SETTLE_MS)
@@ -277,7 +404,44 @@ local function run()
   handle = show(2)
   capture("re-show after window resize (#24)", { expected(win, 2) })
 
+  -- A second show() right after a resize, while the first image is still
+  -- visible, must not place the id Ghostty dropped (#61).
+  resize(80, 80, 0)
+  local again = assert(blit.show(fixture, { width = IMG_COLS, height = IMG_ROWS, lnum = 20 }))
+  wait(SETTLE_MS * 2)
+  capture("show right after window resize (#61)", { expected(win, 2), expected(win, 20) })
+  clear(again)
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local stray = vim.fn.mode() ~= "n"
+    or #lines ~= 200
+    or lines[1] ~= "line 1"
+    or lines[200] ~= "line 200"
+  result(
+    "no stray input after use",
+    not stray,
+    "mode " .. vim.fn.mode() .. ", " .. #lines .. " lines"
+  )
+
   check_health()
+
+  -- After check_health(), which fails on any rejected image.
+  blit.clear_all()
+  copy_file(fixture, corrupt, break_image_data)
+  handle = show(2, nil, nil, corrupt)
+  capture("corrupt PNG shows nothing", {})
+  local listed = false
+  for _, response_error in ipairs(renderer.response_errors()) do
+    listed = listed or response_error.path == corrupt
+  end
+  -- WezTerm sends no error response for bad image data (docs/spec/kitty-graphics.md).
+  local want_listed = want ~= "wezterm"
+  result(
+    "corrupt PNG " .. (want_listed and "is" or "is not") .. " listed as rejected",
+    listed == want_listed,
+    listed and "listed" or "not listed"
+  )
+  clear(handle)
 
   request({
     type = "quit",

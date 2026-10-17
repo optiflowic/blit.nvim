@@ -10,19 +10,32 @@ WezTerm (and Ghostty when available) before tagging a release.
 `make e2e` runs `scripts/e2e/scenario.lua` in kitty, WezTerm and Ghostty
 (macOS only; limit with `make e2e E2E_TERMINALS=ghostty`) and checks the
 screen through screenshots. The terminal you start it from needs Screen
-Recording and Accessibility permissions. It covers: basic placement, `col`
-offset (#9), cropping at the top, bottom and right edges and back
-(#23, #28), `clear()` with no further redraw (#27), the same image twice
-(#10), tab switch (#16), buffer switch, window close, resizing the terminal
-window (#24, #34), `:checkhealth blit`, and nothing left after `:qa`.
+Recording and Accessibility permissions. It runs on the `nvim` on `PATH`;
+use Neovim >= 0.12 so the error-response checks run. It covers every item
+below except the WezTerm crash (#31):
+
+- From screenshots: basic placement, the first `show()` of the session
+  (#19, the `calibrate` image), `col` offset (#9), a second image above the
+  first (#18), a box of another aspect ratio, cropping at the top, bottom
+  and right edges and back (#23, #28), scrolling out of view and back, an
+  overwritten file (#11), the same image twice (#10), `:vsplit` and
+  `:vertical resize`, `clear()` with no further redraw (#27), tab switch
+  (#16), buffer switch, window close, resizing the terminal window
+  (#24, #34), a `show()` right after a resize (#61), a corrupt PNG, and
+  nothing left after `:qa`.
+- From what blit wrote to the terminal: no retransmit when an image scrolls
+  back into view or is re-shown after `clear()`, and one redraw pass per
+  burst of window resizes.
+- From Neovim state: no stray input after use, `:checkhealth blit` reports
+  supported with no rejected image, and the corrupt PNG is listed as
+  rejected on kitty and Ghostty but not on WezTerm.
 
 A larger copy of the image shown first (`calibrate`) is used to measure
 cell size and the screen origin, so every later check depends on it being
 placed right. Glance at that first image once per terminal.
 
-Still checked by hand: the items below that `make e2e` does not cover,
-including the WezTerm crash (#31), typing after use (Neovim >= 0.12), and
-the corrupt PNG error response.
+Still checked by hand: nothing while wezterm/wezterm#7953 is open. See the
+WezTerm crash item (#31) below.
 
 ## Setup
 
@@ -149,7 +162,11 @@ the corrupt PNG error response.
       few debounce intervals with zero further input should still be enough
       to clear it. Pixels stuck past that point (or a second `clear_all()`
       call needed to clear them) are a regression.
-- [ ] **Known limitation, not a release blocker** (issue #31): anchor an
+- [ ] **Known limitation, not a release blocker** (issue #31). Not in
+      `make e2e`, since it kills the terminal under test. Skip it while
+      wezterm/wezterm#7953 is open and no WezTerm release has its fix
+      (`/spec-check` reports both). Once that changes, run
+      `scripts/repro-31-wezterm-crash.sh`, or anchor an
       image ~50 lines down in a long buffer, then scroll continuously (e.g.
       hold `<C-e>` or `j`) so its screen row sweeps through many distinct
       rows. Confirm the WezTerm process crash still reproduces about the
