@@ -154,16 +154,25 @@ local function set_view(topline, topfill)
   wait(SETTLE_MS)
 end
 
--- Resize the terminal window itself and wait for Neovim to see it. Fails the
--- run if the size did not change, since later checks would prove nothing.
-local function resize(dw, dh)
+-- Resize the terminal window itself, wait for Neovim to see it, then wait
+-- `settle_ms` (default SETTLE_MS * 2; 0 returns right away). Fails the run if
+-- the size did not change, since later checks would prove nothing.
+local function resize(dw, dh, settle_ms)
   local before = { vim.o.lines, vim.o.columns }
+  local function changed()
+    return before[1] ~= vim.o.lines or before[2] ~= vim.o.columns
+  end
   request({ type = "resize", dw = dw, dh = dh })
-  wait(SETTLE_MS * 2)
-  assert(
-    before[1] ~= vim.o.lines or before[2] ~= vim.o.columns,
-    "terminal size did not change after resizing its window"
-  )
+  for _ = 1, 100 do
+    if changed() then
+      break
+    end
+    wait(20)
+  end
+  assert(changed(), "terminal size did not change after resizing its window")
+  if settle_ms ~= 0 then
+    wait(settle_ms or SETTLE_MS * 2)
+  end
 end
 
 local function open_scratch()
@@ -397,14 +406,7 @@ local function run()
 
   -- A second show() right after a resize, while the first image is still
   -- visible, must not place the id Ghostty dropped (#61).
-  local before = { vim.o.lines, vim.o.columns }
-  request({ type = "resize", dw = 80, dh = 80 })
-  for _ = 1, 100 do
-    if before[1] ~= vim.o.lines or before[2] ~= vim.o.columns then
-      break
-    end
-    wait(20)
-  end
+  resize(80, 80, 0)
   local again = assert(blit.show(fixture, { width = IMG_COLS, height = IMG_ROWS, lnum = 20 }))
   wait(SETTLE_MS * 2)
   capture("show right after window resize (#61)", { expected(win, 2), expected(win, 20) })
