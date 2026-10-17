@@ -16,19 +16,19 @@ CONTENTS                                                       *blit-contents*
 blit.nvim renders images inside Neovim using the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua.
 
-Status: early v0.x. `show()` places a PNG at a buffer position using
-reserved `virt_lines` and the kitty graphics protocol; `clear()` and
-`clear_all()` remove placements. A placement scrolled partway past a window
-edge shows a cropped slice of the image rather than disappearing; it is
-hidden only once it has no overlap with the window at all. See
-`docs/spec/renderer-placement.md` in the repository for the full design.
+`show()` places a PNG at a buffer position using reserved `virt_lines` and
+the kitty graphics protocol; `clear()` and `clear_all()` remove placements.
+A placement scrolled partway past a window edge shows a cropped slice of the
+image rather than disappearing; it is hidden only once it has no overlap
+with the window at all. See `docs/spec/renderer-placement.md` in the
+repository for the full design.
 
 ==============================================================================
 2. Requirements                                            *blit-requirements*
 
 - Neovim >= 0.10
 - One of the following terminals: kitty, WezTerm, Ghostty
-- tmux is explicitly unsupported in v0.x; blit no-ops under tmux
+- tmux is explicitly unsupported; blit no-ops under tmux
 - GUI frontends and `--embed` (e.g. Neovide) are unsupported; blit no-ops
 
 Run `:checkhealth blit` to see detection results for your environment. On

@@ -54,7 +54,7 @@ today by calling `M.show()` a second time for the second window explicitly
 (same `path`, so the same `(path, mtime)` cache key) — that second call now
 fans out onto the first's image id instead of re-transmitting, per issue
 #10 — but automatic per-window fan-out for a single `show()` call remains
-unimplemented. Accepted for v0.x.
+unimplemented (tracked in #54).
 
 ## Screen coordinate conversion
 
@@ -445,7 +445,7 @@ no autocmd at all: it only ever runs inside `show()`'s own
 resized away and back to the *exact* original `lines`/`columns` before the
 next `show()`, the comparison can't tell that a resize happened in
 between, and a dead entry could still be handed out. This is deemed rare
-enough to accept for v0.x; a `VimResized`-driven design would close it at
+enough to accept; a `VimResized`-driven design would close it at
 the cost of the performance-rule conflict above, and is not pursued here
 without revisiting that rule. Kitty and WezTerm are unaffected either way
 — `terminal_name ~= "ghostty"` short-circuits the check, so their existing
