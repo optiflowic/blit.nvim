@@ -528,6 +528,7 @@ T["show"]["rejects mixing width/height with max_width/max_height (issue #76)"] =
     { width = 5, max_width = 10 },
     { height = 3, max_height = 4 },
     { width = 5, max_height = 4 },
+    { height = 3, max_width = 10 },
   }) do
     local ok = pcall(
       renderer.show,

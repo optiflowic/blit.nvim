@@ -1411,26 +1411,6 @@ local function is_positive_number_or_nil(v)
   return v == nil or (type(v) == "number" and v > 0)
 end
 
--- Fills in whichever of width/height the caller omitted, preserving the
--- PNG's native aspect ratio under an assumed terminal cell aspect ratio
--- (docs/spec/renderer-placement.md's "Reserving space: virt_lines" —
--- blit never queries the terminal's real cell-pixel size, so this is an
--- approximation, not exact). When both are given, they pass through
--- unchanged: no validation against the native aspect ratio, since a caller
--- that already picked both dimensions on purpose (e.g. to stretch/fit a
--- window) should not be overridden. Derivation: displayed px width/height
--- is cols*cell_width_px / rows*cell_height_px; setting that ratio equal to
--- native_width/native_height and solving for the missing side of cols/rows
--- yields the two branches below, both scaled by cell_aspect_ratio
--- (cell_width_px/cell_height_px). Result is clamped to >= 1 cell.
----@param opts_width integer? caller-supplied cell width
----@param opts_height integer? caller-supplied cell height
----@param native_width integer PNG native pixel width
----@param native_height integer PNG native pixel height
----@param cell_aspect_ratio number assumed cell width-px/height-px ratio
----@return integer? width
----@return integer? height
----@return string? err
 ---@param width integer cell columns
 ---@param native_width integer
 ---@param native_height integer
@@ -1451,6 +1431,26 @@ local function derive_width(height, native_width, native_height, cell_aspect_rat
   return math.max(1, math.floor(width + 0.5))
 end
 
+-- Fills in whichever of width/height the caller omitted, preserving the
+-- PNG's native aspect ratio under an assumed terminal cell aspect ratio
+-- (docs/spec/renderer-placement.md's "Reserving space: virt_lines" —
+-- blit never queries the terminal's real cell-pixel size, so this is an
+-- approximation, not exact). When both are given, they pass through
+-- unchanged: no validation against the native aspect ratio, since a caller
+-- that already picked both dimensions on purpose (e.g. to stretch/fit a
+-- window) should not be overridden. Derivation: displayed px width/height
+-- is cols*cell_width_px / rows*cell_height_px; setting that ratio equal to
+-- native_width/native_height and solving for the missing side of cols/rows
+-- yields the two branches below, both scaled by cell_aspect_ratio
+-- (cell_width_px/cell_height_px). Result is clamped to >= 1 cell.
+---@param opts_width integer? caller-supplied cell width
+---@param opts_height integer? caller-supplied cell height
+---@param native_width integer PNG native pixel width
+---@param native_height integer PNG native pixel height
+---@param cell_aspect_ratio number assumed cell width-px/height-px ratio
+---@return integer? width
+---@return integer? height
+---@return string? err
 local function resolve_cell_size(
   opts_width,
   opts_height,
@@ -1554,7 +1554,7 @@ function M.show(path, opts)
         local has_max_size = o.max_width ~= nil or o.max_height ~= nil
         return has_size ~= has_max_size
       end,
-      "opts.width/opts.height or opts.max_width/opts.max_height (one kind is required, not both)",
+      "opts.width/opts.height or opts.max_width/opts.max_height (exactly one kind is required)",
     },
     buf = { opts.buf, "number", true },
     win = { opts.win, "number", true },
