@@ -148,6 +148,8 @@ clip-amount math (`compute_clip`) and the pixel-space conversion
   (see "Unicode placeholders" below). The sentence is worded generally, so
   `/spec-check` should re-check this whenever the `nr`/`nc` branch of
   `grman_update_layers` changes; `docs/manual-testing.md` has a step for it.
+  Observed on kitty 0.49.2: a square PNG shown with `width = 40, height = 4`
+  fills the whole 40x4 box, with no bars.
 - Re-issuing `a=p` with no `x=`/`y=`/`w=`/`h=` at all (the placement having
   previously been cropped, now fully back in view) shows the complete,
   uncropped image again: a placement sent with the same image id and
@@ -283,7 +285,7 @@ letting the next redraw pass re-place it (`a=p`):
 
 | terminal | answer to the transmit | answer to the later `a=p` |
 |---|---|---|
-| kitty 0.48.2 | `EBADPNG:IDAT: incorrect header check` | `ENOENT:Put command refers to image with id: <id> that could not load its data` |
+| kitty 0.48.2, 0.49.2 | `EBADPNG:IDAT: incorrect header check` | `ENOENT:Put command refers to image with id: <id> that could not load its data` |
 | Ghostty 1.3.1 | `EINVAL: invalid data` | `ENOENT: image not found` |
 | WezTerm 20260716-195552-76b606ec | none | none |
 
