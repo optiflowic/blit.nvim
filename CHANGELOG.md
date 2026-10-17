@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v1.0.0...blit.nvim-v1.1.0) (2026-10-17)
+
+
+### Features
+
+* fit an image inside a max_width / max_height box in show() ([#77](https://github.com/optiflowic/blit.nvim/issues/77)) ([8a387ec](https://github.com/optiflowic/blit.nvim/commit/8a387ec8a4a6e02032debdb296374d98f26805ee))
+
 ## [1.0.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v0.2.0...blit.nvim-v1.0.0) (2026-10-17)
 
 
