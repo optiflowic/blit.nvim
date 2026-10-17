@@ -6,16 +6,16 @@
 Zero-dependency image rendering for Neovim via the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 
-> **Status**: v1.0.0 released; the public API follows semver.
+> **Status**: v1.1.0 released; the public API follows semver.
 > `show()`/`clear()`/`clear_all()` render and remove PNG placements via the
 > kitty graphics protocol. A placement scrolled partway past a window edge
 > shows a cropped slice of the image rather than disappearing; it's hidden
-> only once it has no overlap with the window at all. `width`/`height` in
-> `show()` are optional — an omitted dimension is derived from the PNG's
-> native aspect ratio — and `col` offsets the image horizontally. Showing
-> the same file in several places reuses one transmitted image. On
-> Neovim >= 0.12, images the terminal rejects are listed by
-> `:checkhealth blit`.
+> only once it has no overlap with the window at all. Size an image with
+> `width`/`height` in cells (an omitted one is derived from the PNG's native
+> aspect ratio) or fit it inside a `max_width`/`max_height` box, and offset
+> it horizontally with `col`. Showing the same file in several places reuses
+> one transmitted image. On Neovim >= 0.12, images the terminal rejects are
+> listed by `:checkhealth blit`.
 > See `docs/spec/renderer-placement.md` for the design.
 
 ## Requirements
@@ -88,11 +88,13 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
 
 ## Changelog
 
-### Unreleased
+### v1.1.0 (2026-10-17)
 
-- `show()` accepts `max_width`/`max_height` instead of `width`/`height`: the
-  image is sized to fit inside that many cells at the PNG's native aspect
-  ratio ([#76](https://github.com/optiflowic/blit.nvim/issues/76)).
+- `show()` accepts `max_width`/`max_height` as an alternative to
+  `width`/`height`: the image is sized to fit inside that many cells at the
+  PNG's native aspect ratio. `width`/`height` work as before; the two kinds
+  can't be combined in one call
+  ([#76](https://github.com/optiflowic/blit.nvim/issues/76)).
 
 ### v1.0.0 (2026-10-17)
 
