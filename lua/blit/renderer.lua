@@ -1081,6 +1081,10 @@ local debounce_ms = 16
 -- after redraw_all) needs redraw_all to already exist as its timer
 -- callback — declaring the local up front breaks that cycle.
 local schedule_redraw
+-- Forward-declared for the same reason: redraw_all tears everything down
+-- once its last pending delete retry is spent (issue #63), and
+-- maybe_teardown_autocmds is defined further down with the lifecycle code.
+local maybe_teardown_autocmds
 
 local function redraw_all()
   local caps = M._detect_fn()
@@ -1148,6 +1152,11 @@ local function redraw_all()
     pending_deletes = still_pending
     if #pending_deletes > 0 then
       schedule_redraw()
+    else
+      -- The destroy that queued these retries already tried to tear down
+      -- and returned early because they were outstanding; nothing else
+      -- calls it again once the last handle is gone (issue #63).
+      maybe_teardown_autocmds()
     end
   end
 end
@@ -1254,7 +1263,7 @@ end
 
 local autocmds_ready = false
 
-local function maybe_teardown_autocmds()
+maybe_teardown_autocmds = function()
   if #M._handles > 0 or #pending_deletes > 0 then
     return
   end

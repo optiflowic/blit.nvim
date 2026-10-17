@@ -1490,9 +1490,6 @@ T["response_errors"]["unsupported: transmits with q=2 and never listens"] = func
 end
 
 T["response_errors"]["listener is torn down with the last handle"] = function()
-  -- Fails since tests/run.lua made it actually run: the augroup outlives the
-  -- destroy-path delete retries. Remove this skip with the fix for issue #63.
-  MiniTest.skip("blit augroup is not torn down after the last clear() (issue #63)")
   local handle = show_with_response_support(true)
   MiniTest.expect.equality(
     #vim.api.nvim_get_autocmds({ group = "blit", event = "TermResponse" }),
