@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Fixture generation and screenshot checks for scripts/e2e/run.sh.
 
-    check.py fixture <out.png>
+    check.py fixture <out.png> [variant]
     check.py analyze <req.json> <screenshot.bmp> <calib.json>
 
 The fixture is a 4x6 grid of pure colors (channels 0 or 255 only: some
 terminals, e.g. Ghostty, color-manage images and shift mid-tones a lot).
 Neighboring cells, and cells one or two rows apart, never share a color, so a
-misplaced or wrongly cropped image shows up as a wrong color. `analyze`
+misplaced or wrongly cropped image shows up as a wrong color. A variant
+shifts every cell's color by the same amount, so a different image of the
+same layout can be told apart from the default one (variant 0). `analyze`
 samples each grid cell where the request says it should be visible, and scans
 everything else for leftover fixture colors. It prints one result line and exits 1 on FAIL.
 Standard library only (the screenshot is read as BMP; run.sh converts it).
@@ -35,18 +37,18 @@ MATCH_TOLERANCE = 80
 GHOST_LIMIT = 6
 
 
-def color_index(gx, gy):
+def color_index(gx, gy, variant=0):
     """Color of grid cell (gx, gy); shifting by one or two cells changes it."""
-    return (gy + 2 * gx) % len(PALETTE)
+    return (gy + 2 * gx + variant) % len(PALETTE)
 
 
-def write_fixture(path):
+def write_fixture(path, variant=0):
     width, height = GRID_COLS * CELL_PX, GRID_ROWS * CELL_PX
     rows = []
     for y in range(height):
         row = bytearray([0])
         for x in range(width):
-            row += bytes(PALETTE[color_index(x // CELL_PX, y // CELL_PX)])
+            row += bytes(PALETTE[color_index(x // CELL_PX, y // CELL_PX, variant)])
         rows.append(bytes(row))
 
     def chunk(kind, data):
@@ -219,7 +221,7 @@ def check_image(bmp, calib, placement):
                 continue
             cx, cy = (part[0] + part[2]) / 2, (part[1] + part[3]) / 2
             got = sample(bmp, cx, cy)
-            want = color_index(gx, gy)
+            want = color_index(gx, gy, placement.get("variant", 0))
             if got != want:
                 row = int((cy - calib["origin_y"]) // calib["cell_h"]) + 1
                 col = int((cx - calib["origin_x"]) // calib["cell_w"]) + 1
@@ -297,8 +299,8 @@ def analyze(req_path, bmp_path, calib_path):
 
 
 def main(argv):
-    if len(argv) == 3 and argv[1] == "fixture":
-        write_fixture(argv[2])
+    if len(argv) in (3, 4) and argv[1] == "fixture":
+        write_fixture(argv[2], int(argv[3]) if len(argv) == 4 else 0)
         return 0
     if len(argv) == 5 and argv[1] == "analyze":
         return analyze(argv[2], argv[3], argv[4])

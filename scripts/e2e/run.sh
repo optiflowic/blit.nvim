@@ -28,6 +28,8 @@ title="blit-e2e"
 mkdir -p "$run_dir"
 : >"$results"
 python3 "$here/check.py" fixture "$run_dir/fixture.png"
+# Same layout, every color shifted: the "overwritten file" check (#11) shows it.
+python3 "$here/check.py" fixture "$run_dir/variant.png" 3
 
 # Ghostty is started through `open`, which does not pass this shell's PATH on.
 nvim_bin=$(command -v nvim)
