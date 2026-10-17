@@ -6,13 +6,17 @@
 Zero-dependency image rendering for Neovim via the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 
-> **Status**: v0.2.0 released. `show()`/`clear()`/`clear_all()` render and remove
-> PNG placements via the kitty graphics protocol. A placement scrolled
-> partway past a window edge shows a cropped slice of the image rather than
-> disappearing; it's hidden only once it has no overlap with the window at
-> all. `width`/`height` in `show()` are optional — an omitted dimension is
-> derived from the PNG's native aspect ratio. See
-> `docs/spec/renderer-placement.md` for the design.
+> **Status**: v1.0.0 released; the public API follows semver.
+> `show()`/`clear()`/`clear_all()` render and remove PNG placements via the
+> kitty graphics protocol. A placement scrolled partway past a window edge
+> shows a cropped slice of the image rather than disappearing; it's hidden
+> only once it has no overlap with the window at all. `width`/`height` in
+> `show()` are optional — an omitted dimension is derived from the PNG's
+> native aspect ratio — and `col` offsets the image horizontally. Showing
+> the same file in several places reuses one transmitted image. On
+> Neovim >= 0.12, images the terminal rejects are listed by
+> `:checkhealth blit`.
+> See `docs/spec/renderer-placement.md` for the design.
 
 ## Requirements
 
@@ -84,7 +88,7 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
 
 ## Changelog
 
-### Unreleased
+### v1.0.0 (2026-10-17)
 
 - The public API (`setup()`, `show()`, `clear()`, `clear_all()` and their
   options) now follows semver: a breaking change bumps the major version.
@@ -98,6 +102,17 @@ general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/di
   PNG) are recorded and listed by `:checkhealth blit`
   ([#12](https://github.com/optiflowic/blit.nvim/issues/12)). Neovim 0.10 /
   0.11 behave as before.
+- `show()` of a path that is already shown (e.g. in a second window) adds a
+  placement of the already-transmitted image instead of sending it again
+  ([#10](https://github.com/optiflowic/blit.nvim/issues/10)).
+- Long-running sessions free the terminal-side data of images that are no
+  longer shown: entries for a file's older versions, and the least recently
+  used ones when blit's reserved image id range runs out
+  ([#11](https://github.com/optiflowic/blit.nvim/issues/11)).
+- Fixed a misleading "terminal rejected image" error on Ghostty after a
+  window resize ([#61](https://github.com/optiflowic/blit.nvim/issues/61)),
+  and the autocmds and timer staying active after the last image was cleared
+  ([#63](https://github.com/optiflowic/blit.nvim/issues/63)).
 
 ### v0.2.0 (2026-08-08)
 
