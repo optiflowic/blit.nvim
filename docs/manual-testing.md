@@ -16,7 +16,8 @@ below except the WezTerm crash (#31):
 
 - From screenshots: basic placement, the first `show()` of the session
   (#19, the `calibrate` image), `col` offset (#9), a second image above the
-  first (#18), a box of another aspect ratio, cropping at the top, bottom
+  first (#18), a box of another aspect ratio, `max_width`/`max_height`
+  (#76), cropping at the top, bottom
   and right edges and back (#23, #28), scrolling out of view and back, an
   overwritten file (#11), the same image twice (#10), `:vsplit` and
   `:vertical resize`, `clear()` with no further redraw (#27), tab switch
@@ -69,6 +70,9 @@ WezTerm crash item (#31) below.
       the whole 40x4 box, visibly stretched, with no background bars at the
       left/right or top/bottom (`docs/spec/kitty-graphics.md`,
       "Source-rectangle cropping").
+- [ ] `show(path, { max_width = 40, max_height = 4 })` with a taller-than-wide
+      PNG: the image is 4 rows tall and narrower than 40 columns, with its
+      native aspect ratio kept (issue #76).
 - [ ] Scrolling the image fully out of view then back in re-displays it
       without a visible retransmission delay (cache hit).
 - [ ] `show()` a PNG, `clear()` it, overwrite the file at the same path

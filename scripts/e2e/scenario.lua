@@ -332,6 +332,14 @@ local function run()
   capture("fills a box of another aspect ratio", { expected(win, 2, 0, box) })
   clear(handle)
 
+  -- The fixture is 80x120 px, so a 40x4 box is bounded by its height (#76).
+  handle = assert(blit.show(fixture, { max_width = 40, max_height = 4, lnum = 2 }))
+  wait(SETTLE_MS)
+  local fitted = { cols = handle.geometry.cols, rows = handle.geometry.rows }
+  result("max_width/max_height keep the aspect ratio (#76)", fitted.rows == 4 and fitted.cols < 40)
+  capture("fits inside max_width/max_height (#76)", { expected(win, 2, 0, fitted) })
+  clear(handle)
+
   handle = show(2)
   local mark = #writes
   set_view(60)

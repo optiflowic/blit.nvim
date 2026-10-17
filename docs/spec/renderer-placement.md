@@ -30,7 +30,12 @@ response, out of scope per `docs/spec/kitty-graphics.md`'s "Response
 handling" section), so a caller on an unusually wide or narrow font gets a
 slightly off aspect ratio unless it supplies both dimensions itself. When
 the caller supplies both, they pass through unvalidated — blit never
-overrides an intentional stretch/fit. One handle = one entry in
+overrides an intentional stretch/fit. Instead of `width`/`height`, a caller
+can pass `opts.max_width`/`opts.max_height` (issue #76): `fit_cell_size`
+picks the largest size that keeps the native aspect ratio, under the same
+assumed cell aspect ratio, and fits within them (a missing bound is
+unbounded). The two kinds are separate modes; `show()` rejects a call that
+mixes them, so there is no rule for which ratio a capped stretch keeps. One handle = one entry in
 `M._handles`, shaped `{ id, buf, win, extmark_id, path, cache_key, geometry,
 z_index, visible, native_width, native_height }`, matching `AGENTS.md`'s
 "one image = one handle table" rule.

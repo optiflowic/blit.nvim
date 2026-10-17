@@ -67,6 +67,15 @@ show({path}, {opts})
       height      target placement height, in cell rows. At least one of
                   {width}/{height} is required; if omitted, derived from
                   the other and the PNG's native aspect ratio.
+      max_width   instead of {width}/{height}: fit the image, at the PNG's
+                  native aspect ratio, inside this many cell columns. At
+                  least one of {max_width}/{max_height} is required in
+                  this mode; with only one, the other side is unbounded.
+                  Combining {max_width}/{max_height} with {width}/{height}
+                  is an argument error.
+      max_height  instead of {width}/{height}: fit the image, at the PNG's
+                  native aspect ratio, inside this many cell rows. See
+                  {max_width}.
       buf         buffer to anchor in (default: current buffer of {win})
       win         window to anchor in (default: current window)
       lnum        1-indexed anchor line (default: {win}'s cursor line)
@@ -81,14 +90,16 @@ show({path}, {opts})
                   past it, hidden.
       z_index     kitty placement z-index (default: unset)
       cell_aspect_ratio  assumed terminal cell width-px/height-px ratio,
-                  used only to derive an omitted {width}/{height} (default:
+                  used only to derive an omitted {width}/{height} or to fit
+                  {max_width}/{max_height} (default:
                   |blit-config.cell_aspect_ratio|)
 
     blit reads the PNG's native pixel dimensions to support cropping a
     partially-visible placement (e.g. a placement scrolled halfway off a
     window edge shows a cropped slice instead of hiding entirely) and, when
     the caller omits one of {width}/{height}, to derive it from the other
-    under the assumed {cell_aspect_ratio}. blit never queries the terminal
+    (or, with {max_width}/{max_height}, to fit it inside that box) under the
+    assumed {cell_aspect_ratio}. blit never queries the terminal
     for its real cell-pixel size, so this is an approximation; when both
     {width} and {height} are supplied, they pass through unvalidated.
 
@@ -135,7 +146,8 @@ debounce_ms ~
 cell_aspect_ratio ~
     Assumed terminal cell width-px/height-px ratio, used only to derive a
     |blit.show()| {opts.width}/{opts.height} the caller omitted from the
-    other and the PNG's native aspect ratio. blit does not query the
+    other and the PNG's native aspect ratio, or to fit the image inside
+    {opts.max_width}/{opts.max_height}. blit does not query the
     terminal for its real cell-pixel size, so this is a fixed
     approximation; override per-call with {opts.cell_aspect_ratio} if your
     font's cell metrics differ noticeably. Ignored when the caller supplies

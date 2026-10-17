@@ -1431,6 +1431,26 @@ end
 ---@return integer? width
 ---@return integer? height
 ---@return string? err
+---@param width integer cell columns
+---@param native_width integer
+---@param native_height integer
+---@param cell_aspect_ratio number
+---@return integer height cell rows, >= 1
+local function derive_height(width, native_width, native_height, cell_aspect_ratio)
+  local height = width * cell_aspect_ratio * native_height / native_width
+  return math.max(1, math.floor(height + 0.5))
+end
+
+---@param height integer cell rows
+---@param native_width integer
+---@param native_height integer
+---@param cell_aspect_ratio number
+---@return integer width cell columns, >= 1
+local function derive_width(height, native_width, native_height, cell_aspect_ratio)
+  local width = height * (native_width / native_height) / cell_aspect_ratio
+  return math.max(1, math.floor(width + 0.5))
+end
+
 local function resolve_cell_size(
   opts_width,
   opts_height,
@@ -1442,26 +1462,58 @@ local function resolve_cell_size(
     return opts_width, opts_height
   end
   if opts_width then
-    local height = opts_width * cell_aspect_ratio * native_height / native_width
-    return opts_width, math.max(1, math.floor(height + 0.5))
+    return opts_width, derive_height(opts_width, native_width, native_height, cell_aspect_ratio)
   end
   if opts_height then
-    local width = opts_height * (native_width / native_height) / cell_aspect_ratio
-    return math.max(1, math.floor(width + 0.5)), opts_height
+    return derive_width(opts_height, native_width, native_height, cell_aspect_ratio), opts_height
   end
   return nil, nil, "blit: opts.width or opts.height is required"
 end
 M.resolve_cell_size = resolve_cell_size
+
+-- The largest cell size that keeps the PNG's native aspect ratio (under the
+-- same assumed cell aspect ratio as resolve_cell_size) and fits within
+-- max_width x max_height. A nil bound leaves that side unbounded. Each side
+-- is clamped to >= 1 cell, so a bound too small for the aspect ratio can
+-- leave the other side at 1 rather than 0.
+---@param max_width integer? cell columns
+---@param max_height integer? cell rows
+---@param native_width integer PNG native pixel width
+---@param native_height integer PNG native pixel height
+---@param cell_aspect_ratio number assumed cell width-px/height-px ratio
+---@return integer? width
+---@return integer? height
+---@return string? err
+local function fit_cell_size(max_width, max_height, native_width, native_height, cell_aspect_ratio)
+  if not max_width and not max_height then
+    return nil, nil, "blit: opts.max_width or opts.max_height is required"
+  end
+  if max_width then
+    local height = derive_height(max_width, native_width, native_height, cell_aspect_ratio)
+    if not max_height or height <= max_height then
+      return max_width, height
+    end
+  end
+  local width = derive_width(max_height, native_width, native_height, cell_aspect_ratio)
+  return math.min(width, max_width or width), max_height
+end
+M.fit_cell_size = fit_cell_size
 
 -- Public API ------------------------------------------------------------------
 
 ---@class blit.ShowOpts
 ---@field width? integer target placement width in cell columns; if omitted,
 ---derived from {height} and the PNG's native aspect ratio. One of
----{width}/{height} is required.
+---{width}/{height} (or {max_width}/{max_height} instead) is required.
 ---@field height? integer target placement height in cell rows; if omitted,
 ---derived from {width} and the PNG's native aspect ratio. One of
----{width}/{height} is required.
+---{width}/{height} (or {max_width}/{max_height} instead) is required.
+---@field max_width? integer instead of {width}/{height}: fit the image, at its
+---native aspect ratio, inside this many cell columns. One of
+---{max_width}/{max_height} is required in this mode; with only one, the other
+---side is unbounded. Cannot be combined with {width}/{height}.
+---@field max_height? integer instead of {width}/{height}: fit the image, at
+---its native aspect ratio, inside this many cell rows. See {max_width}.
 ---@field buf? integer defaults to the current buffer of {win}
 ---@field win? integer defaults to the current window
 ---@field lnum? integer 1-indexed anchor line, defaults to {win}'s cursor line
@@ -1472,7 +1524,8 @@ M.resolve_cell_size = resolve_cell_size
 ---@field max_file_bytes? integer defaults to blit.config.defaults.max_file_bytes
 ---@field debounce_ms? integer defaults to the last configured value (initially 16)
 ---@field cell_aspect_ratio? number assumed cell width-px/height-px ratio,
----used only to derive an omitted {width}/{height}; defaults to
+---used only to derive an omitted {width}/{height} or to fit {max_width}/
+---{max_height}; defaults to
 ---blit.config.defaults.cell_aspect_ratio
 
 ---@param path string
@@ -1484,12 +1537,24 @@ function M.show(path, opts)
   vim.validate({
     width = { opts.width, is_positive_integer_or_nil, "a positive integer (cell columns), or nil" },
     height = { opts.height, is_positive_integer_or_nil, "a positive integer (cell rows), or nil" },
-    width_or_height = {
-      opts.width or opts.height,
-      function(v)
-        return v ~= nil
+    max_width = {
+      opts.max_width,
+      is_positive_integer_or_nil,
+      "a positive integer (cell columns), or nil",
+    },
+    max_height = {
+      opts.max_height,
+      is_positive_integer_or_nil,
+      "a positive integer (cell rows), or nil",
+    },
+    size = {
+      opts,
+      function(o)
+        local has_size = o.width ~= nil or o.height ~= nil
+        local has_max_size = o.max_width ~= nil or o.max_height ~= nil
+        return has_size ~= has_max_size
       end,
-      "opts.width or opts.height (at least one is required)",
+      "opts.width/opts.height or opts.max_width/opts.max_height (one kind is required, not both)",
     },
     buf = { opts.buf, "number", true },
     win = { opts.win, "number", true },
@@ -1574,8 +1639,14 @@ function M.show(path, opts)
   end
 
   local cell_aspect_ratio = opts.cell_aspect_ratio or config.defaults.cell_aspect_ratio
-  local width, height, size_err =
-    resolve_cell_size(opts.width, opts.height, native_width, native_height, cell_aspect_ratio)
+  local width, height, size_err
+  if opts.max_width or opts.max_height then
+    width, height, size_err =
+      fit_cell_size(opts.max_width, opts.max_height, native_width, native_height, cell_aspect_ratio)
+  else
+    width, height, size_err =
+      resolve_cell_size(opts.width, opts.height, native_width, native_height, cell_aspect_ratio)
+  end
   if not width then
     return nil, size_err
   end
