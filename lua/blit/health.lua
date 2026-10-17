@@ -8,7 +8,7 @@ local renderer = require("blit.renderer")
 local M = {}
 
 local REASON_MESSAGES = {
-  tmux = "blit is explicitly unsupported under tmux in v0.x (silent no-op).",
+  tmux = "blit is explicitly unsupported under tmux (silent no-op).",
   gui_embed = "GUI frontends and `--embed` are unsupported (silent no-op).",
   unsupported_terminal = "no supported terminal detected (kitty, WezTerm, Ghostty); silent no-op.",
 }

@@ -24,7 +24,7 @@ Every command is an APC (Application Program Command) escape sequence:
 | Key | Meaning | Values blit emits |
 |---|---|---|
 | `a` | action | `T` (transmit+display), `t` (transmit only), `p` (display existing), `d` (delete) |
-| `f` | pixel format | `100` (PNG) — only format blit ever sends, per the PNG-only v0.x constraint |
+| `f` | pixel format | `100` (PNG) — only format blit ever sends, per the PNG-only constraint |
 | `t` | transmission medium | `d` (direct, i.e. the payload is in the escape code itself) — blit never uses file-based (`t=f`) or shared-memory transmission, to avoid any filesystem/IPC surface beyond reading the source PNG |
 | `i` | image id | one of blit's reserved range, see below |
 | `q` | quiet | when responses can be received: `1` (suppress `OK`, keep errors) on transmits (`a=T`/`a=t`) and standalone placements (`a=p`). Otherwise `2` (suppress everything) on transmits and no `q` key on placements. Never on deletes — see "Response handling" below |
@@ -186,7 +186,7 @@ clip-amount math (`compute_clip`) and the pixel-space conversion
 
 The protocol also supports a Unicode-placeholder-based placement mode
 (drawing images via a special Unicode codepoint region plus diacritics
-encoding row/column/image-id). blit does not use this in v0.x — it exists
+encoding row/column/image-id). blit does not use this — it exists
 for terminal-multiplexer/scrollback-friendly placement, which is out of
 scope while tmux is explicitly unsupported. Documented here so a future v2
 revisiting tmux support doesn't have to rediscover this from scratch.

@@ -37,7 +37,7 @@ Applied regardless of which terminal (if any) matched above, in this fixed
 precedence order:
 
 1. **tmux**: `$TMUX` is set → excluded, `reason = "tmux"`. Per `AGENTS.md`,
-   tmux is explicitly unsupported in v0.x even when the outer terminal is
+   tmux is explicitly unsupported even when the outer terminal is
    one of the three supported ones — tmux's own screen multiplexing breaks
    the graphics protocol's placement model.
 2. **GUI / `--embed`**: `vim.fn.has("ttyout") == 0` → excluded,
@@ -128,7 +128,7 @@ attempts, before giving up. Writes to a tty/pipe fd are also not guaranteed
 to consume the whole buffer in one call regardless of blocking mode, so
 `write_all()` loops on partial writes (`n < #data`) until fully flushed.
 
-## Known false-negative / false-positive risks (accepted for v0.x)
+## Known false-negative / false-positive risks (accepted)
 
 - `$TERM_PROGRAM` can be spoofed or left stale by nested tools (e.g. a
   terminal launched from within another, or an SSH session into a host
@@ -137,7 +137,7 @@ to consume the whole buffer in one call regardless of blocking mode, so
 - `$KITTY_WINDOW_ID` can persist into subshells/nested sessions (e.g. after
   `ssh` into a machine where the variable was exported) even when the
   actual terminal on the other end is not kitty. This is an accepted,
-  documented limitation, not solved in v0.x.
+  documented limitation, not solved (tracked in #13).
 
 ## Future considerations (not implemented)
 

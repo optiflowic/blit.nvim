@@ -37,7 +37,7 @@ Severity when reporting findings:
 ## API & Errors (category: api)
 - [ ] Expected failures return `nil, err_msg`; `error()` only for programmer mistakes via `vim.validate`
 - [ ] No `vim.notify` from library code
-- [ ] Public functions have LuaLS annotations; breaking changes called out (v0.x policy)
+- [ ] Public functions have LuaLS annotations; breaking changes called out (`!` / `BREAKING CHANGE:`, bumps MAJOR)
 - [ ] `setup()` remains idempotent
 
 ## Tests & Docs (category: test/docs)

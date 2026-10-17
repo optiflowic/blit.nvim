@@ -10,12 +10,12 @@ No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
   it is out of scope (or becomes an optional, auto-detected enhancement — ask first).
 - **Neovim >= 0.10 only.** Use built-ins: `vim.base64`, `vim.system`, `vim.uv`,
   `vim.api.nvim_buf_set_extmark`. Never vendor polyfills for older versions.
-- **PNG only (v0.x).** The kitty protocol accepts PNG natively (`f=100`). Other
+- **PNG only.** The kitty protocol accepts PNG natively (`f=100`). Other
   formats are out of scope until v2.
 - **Supported terminals: kitty, WezTerm, Ghostty.** Detect via env vars. On any
   other terminal (or GUI/`--embed`), silently no-op and report via `:checkhealth`.
   Never emit escape sequences to an unsupported terminal.
-- **tmux is explicitly unsupported in v0.x.** Detect (`$TMUX`) and no-op.
+- **tmux is explicitly unsupported.** Detect (`$TMUX`) and no-op.
 
 ## Architecture
 
@@ -118,8 +118,8 @@ Before implementing against an external spec, write/update a memo in `docs/spec/
 
 - `docs/spec/kitty-graphics.md` — the subset of the kitty graphics protocol we use:
   transmission (`a=T`, `f=100`, chunked `m=0/1`, 4096-byte chunks), placement
-  (`c=`, `r=`, `z=`), deletion (`a=d`), unicode placeholders (documented but unused
-  in v0.x), quirks per terminal (WezTerm: no placeholder support, known scroll lag).
+  (`c=`, `r=`, `z=`), deletion (`a=d`), unicode placeholders (documented but
+  unused), quirks per terminal (WezTerm: no placeholder support, known scroll lag).
 - `docs/spec/terminal-detection.md` — detection matrix: env vars, DA1 queries if
   used, GUI/embed exclusion logic.
 
@@ -157,17 +157,17 @@ the memo, fix the memo in the same PR.
   Small, single-purpose commits.
 - CI (GitHub Actions): `stylua --check`, `selene`, `make test` on Linux + macOS.
   All green before merge.
-- v0.x: breaking API changes are allowed but must be called out in the commit body
-  and README changelog section.
+- Versioning follows semver: a breaking API change bumps MAJOR. Mark it with `!`
+  or a `BREAKING CHANGE:` footer and call it out in the commit body and README
+  changelog section.
 - When a spec is ambiguous or two valid designs conflict with these rules:
   STOP and ask. Do not pick silently. Present options with trade-offs.
 - Releases: [release-please](https://github.com/googleapis/release-please)
   (`.github/workflows/release-please.yaml`) tracks Conventional Commits on `main`
   and keeps an up-to-date release PR open, bumping `.release-please-manifest.json`
-  and `CHANGELOG.md`. `bump-minor-pre-major` is enabled, so `feat:`/breaking
-  changes bump MINOR (not MAJOR) while the manifest major version stays `0`,
-  matching the `0.MINOR.PATCH` policy above. Merging the release PR tags the
-  release — run `docs/manual-testing.md`'s checklist first.
+  and `CHANGELOG.md`: `fix:` bumps PATCH, `feat:` bumps MINOR, and a breaking
+  change bumps MAJOR. Merging the release PR tags the release — run
+  `docs/manual-testing.md`'s checklist first.
 
 ## Out of Scope (do not implement without explicit approval)
 
