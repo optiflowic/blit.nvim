@@ -749,6 +749,7 @@ T["clear"]["is a no-op on a handle blit already destroyed (issue #81)"] = functi
     height = 10,
     style = "minimal",
   })
+  table.insert(opened_wins, other_win)
 
   local kept = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
   local closed =
