@@ -737,6 +737,49 @@ T["clear"]["reusing the id before retries finish cancels the pending retry (issu
   end
 end
 
+T["clear"]["is a no-op on a handle blit already destroyed (issue #81)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  local other_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(other_buf, 0, -1, false, numbered_lines(10))
+  local other_win = vim.api.nvim_open_win(other_buf, false, {
+    relative = "editor",
+    row = 0,
+    col = 30,
+    width = 20,
+    height = 10,
+    style = "minimal",
+  })
+
+  local kept = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  local closed =
+    renderer.show(tmp_path, { width = 5, height = 3, buf = other_buf, win = other_win, lnum = 2 })
+  MiniTest.expect.equality(closed.id, kept.id)
+
+  -- blit tears `closed` down on its own via WinClosed; the caller still
+  -- holds it and has no public way to tell.
+  vim.api.nvim_win_close(other_win, true)
+  MiniTest.expect.equality(#renderer._handles, 1)
+
+  captured = {}
+  renderer.clear(closed)
+  MiniTest.expect.equality(captured, {})
+  MiniTest.expect.equality(#renderer._handles, 1)
+
+  -- The shared cache entry must still count `kept` as live: a fan-out show
+  -- that fails mid-placement only removes its own placement, never frees
+  -- the pixel data `kept` is still displaying.
+  captured = {}
+  renderer._write_fn = function(sequences)
+    table.insert(captured, sequences)
+    return false, "write failed"
+  end
+  local failed = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 6 })
+  MiniTest.expect.equality(failed, nil)
+  for _, seq in ipairs(captured) do
+    MiniTest.expect.equality(table.concat(seq, ""):find("d=I", 1, true), nil)
+  end
+end
+
 T["clear_all"] = MiniTest.new_set()
 
 T["clear_all"]["clears every active handle"] = function()

@@ -1199,15 +1199,25 @@ local function destroy_handle(handle, opts)
   local free_data_requested = (opts and opts.free_data) or false
   local shutting_down = (opts and opts.shutting_down) or false
 
-  if vim.api.nvim_buf_is_valid(handle.buf) then
-    pcall(vim.api.nvim_buf_del_extmark, handle.buf, ensure_namespace(), handle.extmark_id)
-  end
-
+  -- A handle no longer in M._handles was already destroyed (by blit itself
+  -- on BufWinLeave/WinClosed/BufWipeout, or by an earlier clear()). Tearing
+  -- it down again would decrement its cache entry's active_placements a
+  -- second time, undercounting any sibling placement still sharing that
+  -- entry (issue #81).
+  local index
   for i, h in ipairs(M._handles) do
     if h == handle then
-      table.remove(M._handles, i)
+      index = i
       break
     end
+  end
+  if not index then
+    return
+  end
+  table.remove(M._handles, index)
+
+  if vim.api.nvim_buf_is_valid(handle.buf) then
+    pcall(vim.api.nvim_buf_del_extmark, handle.buf, ensure_namespace(), handle.extmark_id)
   end
 
   local entry = find_cache_entry(handle.cache_key, handle.id)
