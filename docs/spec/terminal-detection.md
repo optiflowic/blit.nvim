@@ -36,10 +36,27 @@ are read.
 Applied regardless of which terminal (if any) matched above, in this fixed
 precedence order:
 
-1. **tmux**: `$TMUX` is set → excluded, `reason = "tmux"`. Per `AGENTS.md`,
-   tmux is explicitly unsupported even when the outer terminal is
-   one of the three supported ones — tmux's own screen multiplexing breaks
-   the graphics protocol's placement model.
+1. **Terminal multiplexer**: any of these is set → excluded,
+   `reason = "multiplexer"`, and `multiplexer` in the capabilities names
+   the one found:
+
+   | Variable | Multiplexer |
+   |---|---|
+   | `$HERDR_ENV` | herdr |
+   | `$TMUX` | tmux |
+   | `$ZELLIJ` | Zellij |
+   | `$STY` | GNU screen |
+
+   Per `AGENTS.md`, multiplexers are explicitly unsupported even when the
+   outer terminal is one of the three supported ones — a multiplexer keeps
+   its own screen and its panes' layout, which breaks the graphics
+   protocol's placement model. They pass the outer terminal's environment
+   on (`$TERM_PROGRAM`, `$KITTY_WINDOW_ID`, ...), so the terminal match
+   above alone would wrongly report support. Variables are checked in the
+   order of the table; herdr comes first because it does not clear an
+   inherited `$TMUX`, so both can be set inside herdr. herdr uses Ghostty's
+   VT engine and may pass images through some day; that cannot be
+   confirmed now, so it is excluded like tmux.
 2. **GUI / `--embed`**: `vim.fn.has("ttyout") == 0` → excluded,
    `reason = "gui_embed"`. This covers `nvim --embed` and GUI frontends
    (e.g. Neovide) that connect to Neovim over msgpack-RPC rather than a
@@ -48,7 +65,7 @@ precedence order:
    extra dependency, consistent with the Neovim ≥0.10 built-ins-only
    constraint.
 
-Precedence is fixed (tmux checked before gui_embed) so that when both
+Precedence is fixed (multiplexer checked before gui_embed) so that when both
 conditions hold simultaneously, `detect()` always reports the same single
 `reason` deterministically — this is asserted directly in
 `tests/test_terminal_detect.lua` rather than left as an implementation

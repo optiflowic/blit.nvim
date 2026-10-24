@@ -32,14 +32,33 @@ T["detect_terminal"]["no signals is nil"] = function()
   MiniTest.expect.equality(terminal.detect_terminal({}), nil)
 end
 
-T["has_tmux"] = MiniTest.new_set()
+T["detect_multiplexer"] = MiniTest.new_set()
 
-T["has_tmux"]["true when TMUX set"] = function()
-  MiniTest.expect.equality(terminal.has_tmux({ TMUX = "/tmp/tmux-1000/default,123,0" }), true)
+T["detect_multiplexer"]["tmux from TMUX"] = function()
+  local env = { TMUX = "/tmp/tmux-1000/default,123,0" }
+  MiniTest.expect.equality(terminal.detect_multiplexer(env), "tmux")
 end
 
-T["has_tmux"]["false when unset"] = function()
-  MiniTest.expect.equality(terminal.has_tmux({}), false)
+T["detect_multiplexer"]["Zellij from ZELLIJ"] = function()
+  MiniTest.expect.equality(terminal.detect_multiplexer({ ZELLIJ = "0" }), "Zellij")
+end
+
+T["detect_multiplexer"]["herdr from HERDR_ENV"] = function()
+  MiniTest.expect.equality(terminal.detect_multiplexer({ HERDR_ENV = "1" }), "herdr")
+end
+
+T["detect_multiplexer"]["GNU screen from STY"] = function()
+  local env = { STY = "12345.pts-0.host" }
+  MiniTest.expect.equality(terminal.detect_multiplexer(env), "GNU screen")
+end
+
+T["detect_multiplexer"]["herdr wins over the TMUX it inherits"] = function()
+  local env = { TMUX = "/tmp/tmux-1000/default,123,0", HERDR_ENV = "1" }
+  MiniTest.expect.equality(terminal.detect_multiplexer(env), "herdr")
+end
+
+T["detect_multiplexer"]["nil when none set"] = function()
+  MiniTest.expect.equality(terminal.detect_multiplexer({}), nil)
 end
 
 T["is_gui_embed"] = MiniTest.new_set()
@@ -57,16 +76,31 @@ T["detect"] = MiniTest.new_set()
 T["detect"]["fully supported"] = function()
   local caps = terminal.detect({ KITTY_WINDOW_ID = "1" }, tty_ok)
   MiniTest.expect.equality(caps.terminal, "kitty")
-  MiniTest.expect.equality(caps.tmux, false)
+  MiniTest.expect.equality(caps.multiplexer, nil)
   MiniTest.expect.equality(caps.gui_embed, false)
   MiniTest.expect.equality(caps.supported, true)
   MiniTest.expect.equality(caps.reason, nil)
 end
 
-T["detect"]["tmux excludes even inside a supported terminal"] = function()
-  local caps = terminal.detect({ KITTY_WINDOW_ID = "1", TMUX = "x" }, tty_ok)
+T["detect"]["each multiplexer excludes even inside a supported terminal"] = function()
+  for var, name in pairs({
+    TMUX = "tmux",
+    ZELLIJ = "Zellij",
+    HERDR_ENV = "herdr",
+    STY = "GNU screen",
+  }) do
+    local caps = terminal.detect({ TERM_PROGRAM = "ghostty", [var] = "x" }, tty_ok)
+    MiniTest.expect.equality(caps.supported, false)
+    MiniTest.expect.equality(caps.reason, "multiplexer")
+    MiniTest.expect.equality(caps.multiplexer, name)
+  end
+end
+
+T["detect"]["herdr with an inherited TMUX reports herdr"] = function()
+  local caps = terminal.detect({ TERM_PROGRAM = "ghostty", TMUX = "x", HERDR_ENV = "1" }, tty_ok)
   MiniTest.expect.equality(caps.supported, false)
-  MiniTest.expect.equality(caps.reason, "tmux")
+  MiniTest.expect.equality(caps.reason, "multiplexer")
+  MiniTest.expect.equality(caps.multiplexer, "herdr")
 end
 
 T["detect"]["gui_embed excludes"] = function()
@@ -75,10 +109,10 @@ T["detect"]["gui_embed excludes"] = function()
   MiniTest.expect.equality(caps.reason, "gui_embed")
 end
 
-T["detect"]["tmux takes precedence over gui_embed"] = function()
-  local caps = terminal.detect({ KITTY_WINDOW_ID = "1", TMUX = "x" }, tty_embed)
+T["detect"]["multiplexer takes precedence over gui_embed"] = function()
+  local caps = terminal.detect({ KITTY_WINDOW_ID = "1", ZELLIJ = "0" }, tty_embed)
   MiniTest.expect.equality(caps.supported, false)
-  MiniTest.expect.equality(caps.reason, "tmux")
+  MiniTest.expect.equality(caps.reason, "multiplexer")
 end
 
 T["detect"]["unsupported terminal with no other exclusion"] = function()

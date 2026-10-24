@@ -8,7 +8,6 @@ local renderer = require("blit.renderer")
 local M = {}
 
 local REASON_MESSAGES = {
-  tmux = "blit is explicitly unsupported under tmux (silent no-op).",
   gui_embed = "GUI frontends and `--embed` are unsupported (silent no-op).",
   unsupported_terminal = "no supported terminal detected (kitty, WezTerm, Ghostty); silent no-op.",
 }
@@ -18,6 +17,15 @@ local WEZTERM_CRASH_WARNING = "known issue: sustained fast scrolling with an ima
   .. "Root cause confirmed WezTerm-side, fix verified but not yet released upstream "
   .. "(https://github.com/wezterm/wezterm/issues/7953). See "
   .. "https://github.com/optiflowic/blit.nvim/issues/31 and README's Known Issues section."
+
+---@param caps blit.terminal.Capabilities
+---@return string
+local function unsupported_message(caps)
+  if caps.reason == "multiplexer" then
+    return ("blit is unsupported inside %s (silent no-op)."):format(caps.multiplexer)
+  end
+  return REASON_MESSAGES[caps.reason] or ("blit is unsupported: " .. tostring(caps.reason))
+end
 
 function M.check()
   vim.health.start("blit")
@@ -41,9 +49,7 @@ function M.check()
   end
 
   if not caps.supported then
-    vim.health.warn(
-      REASON_MESSAGES[caps.reason] or ("blit is unsupported: " .. tostring(caps.reason))
-    )
+    vim.health.warn(unsupported_message(caps))
     return
   end
   vim.health.ok("blit is supported in this environment")

@@ -28,7 +28,8 @@ repository for the full design.
 
 - Neovim >= 0.10
 - One of the following terminals: kitty, WezTerm, Ghostty
-- tmux is explicitly unsupported; blit no-ops under tmux
+- Terminal multiplexers (tmux, Zellij, herdr, GNU screen) are explicitly
+  unsupported; blit no-ops inside them
 - GUI frontends and `--embed` (e.g. Neovide) are unsupported; blit no-ops
 
 Run `:checkhealth blit` to see detection results for your environment. On
