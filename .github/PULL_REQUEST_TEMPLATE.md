@@ -30,4 +30,5 @@
 - [ ] I have added unit tests for new pure logic (escape sequences, chunking, geometry, detection).
 - [ ] I have updated the relevant `docs/spec/` memo if protocol or terminal-detection behavior changed.
 - [ ] I have updated `doc/blit.txt` and/or README if this changes the public API.
+- [ ] If I changed `scripts/e2e/`, I have not loosened its checks (tolerances, corrections, skip conditions).
 - [ ] I have followed [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, etc.).
