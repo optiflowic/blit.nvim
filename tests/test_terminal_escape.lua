@@ -111,6 +111,11 @@ T["build_transmit"]["placement without a placement_id is rejected"] = function()
   MiniTest.expect.equality(ok, false)
 end
 
+T["build_transmit"]["quiet 0 is rejected (q=0 is not in the spec memo)"] = function()
+  local ok = pcall(terminal.build_transmit, "hi", { id = ID, quiet = 0 })
+  MiniTest.expect.equality(ok, false)
+end
+
 T["build_transmit"]["combined transmit+placement carries crop keys before c=/r="] = function()
   local png_bytes = "hi"
   local sequences = terminal.build_transmit(png_bytes, {
