@@ -27,7 +27,7 @@ local APC_END = ESC .. "\\"
 ---@class blit.terminal.TransmitOpts
 ---@field id integer
 ---@field action? blit.terminal.Action  -- default "T"
----@field quiet? 0|1|2                  -- default 2
+---@field quiet? 1|2                    -- default 2
 ---@field placement? blit.terminal.PlacementOpts
 
 -- Every real placement command carries a caller-supplied `p=` (placement
@@ -134,9 +134,9 @@ function M.build_transmit(png_bytes, opts)
     quiet = {
       opts.quiet,
       function(v)
-        return v == nil or v == 0 or v == 1 or v == 2
+        return v == nil or v == 1 or v == 2
       end,
-      "0, 1, or 2",
+      "1, 2, or nil",
     },
     placement = {
       opts.placement,

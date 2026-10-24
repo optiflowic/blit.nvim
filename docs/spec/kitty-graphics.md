@@ -306,5 +306,5 @@ upstream docs for anything already covered above.
 Pins for `/spec-check` (what upstream looked like when this memo was last
 compared against it):
 
-- Last verified: 2026-10-17
-- kitty-docs: 50ede63f29 / kitty: 10b3792dfb / wezterm: 6c7e3722b1 / ghostty: 44c4c8f55d
+- Last verified: 2026-10-24
+- kitty-docs: 2efa09dd07 / kitty: 2efa09dd07 / wezterm: 6c7e3722b1 / ghostty: 3079a43966
