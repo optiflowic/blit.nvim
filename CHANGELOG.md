@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v1.1.0...blit.nvim-v1.1.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* make clear() a no-op on a handle blit already destroyed ([#82](https://github.com/optiflowic/blit.nvim/issues/82)) ([bb0c914](https://github.com/optiflowic/blit.nvim/commit/bb0c9140ddc22b228404dc6606195ea92ad11357))
+
 ## [1.1.0](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v1.0.0...blit.nvim-v1.1.0) (2026-10-17)
 
 
