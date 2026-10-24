@@ -58,7 +58,8 @@ show({path}, {opts})
     Show the PNG at {path} anchored under buffer line {opts.lnum}.
     Returns a handle table on success, or `nil, err_msg` on failure
     (unsupported environment, missing/oversized file, not a valid PNG,
-    or bad arguments).
+    an invalid {opts.win}/{opts.buf}, an {opts.lnum} outside the buffer,
+    or bad arguments). A failed call leaves nothing behind.
 
     {opts} is a table:
       width       target placement width, in cell columns. At least one of

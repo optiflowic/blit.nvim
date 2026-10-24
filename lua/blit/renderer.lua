@@ -1538,6 +1538,30 @@ M.fit_cell_size = fit_cell_size
 ---{max_height}; defaults to
 ---blit.config.defaults.cell_aspect_ratio
 
+---Where show() anchors the image, or why it cannot. The window, buffer or
+---line can be gone by the time a caller acts on them (e.g. an async render
+---while the user edits), so this is an expected failure, not a bad argument.
+---@param opts blit.ShowOpts
+---@return { win: integer, buf: integer, lnum: integer }? target
+---@return string? err
+local function resolve_target(opts)
+  local win = opts.win or vim.api.nvim_get_current_win()
+  if not vim.api.nvim_win_is_valid(win) then
+    return nil, "blit: invalid window " .. win
+  end
+  local buf = opts.buf or vim.api.nvim_win_get_buf(win)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return nil, "blit: invalid buffer " .. buf
+  end
+  local lnum = opts.lnum or vim.api.nvim_win_get_cursor(win)[1]
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if lnum < 1 or lnum > line_count then
+    return nil,
+      ("blit: lnum %s is out of range (buffer %d has %d lines)"):format(lnum, buf, line_count)
+  end
+  return { win = win, buf = buf, lnum = lnum }
+end
+
 ---@param path string
 ---@param opts blit.ShowOpts
 ---@return blit.Handle? handle
@@ -1600,9 +1624,13 @@ function M.show(path, opts)
       "blit: " .. path .. " exceeds max_file_bytes (" .. stat.size .. " > " .. max_bytes .. ")"
   end
 
-  local win = opts.win or vim.api.nvim_get_current_win()
-  local buf = opts.buf or vim.api.nvim_win_get_buf(win)
-  local lnum = opts.lnum or vim.api.nvim_win_get_cursor(win)[1]
+  -- Before the cache lookup below: a failure after it would leave an id and
+  -- cache entry behind that no handle owns (issue #92).
+  local target, target_err = resolve_target(opts)
+  if not target then
+    return nil, target_err
+  end
+  local win, buf, lnum = target.win, target.buf, target.lnum
   local col = opts.col or 0
 
   debounce_ms = opts.debounce_ms or debounce_ms
