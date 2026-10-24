@@ -6,7 +6,7 @@
 Zero-dependency image rendering for Neovim via the kitty graphics protocol.
 No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 
-> **Status**: v1.1.0 released; the public API follows semver.
+> **Status**: v1.1.1 released; the public API follows semver.
 > `show()`/`clear()`/`clear_all()` render and remove PNG placements via the
 > kitty graphics protocol. A placement scrolled partway past a window edge
 > shows a cropped slice of the image rather than disappearing; it's hidden
@@ -87,6 +87,14 @@ requests use the [issue templates](https://github.com/optiflowic/blit.nvim/issue
 general questions go in [Discussions](https://github.com/optiflowic/blit.nvim/discussions).
 
 ## Changelog
+
+### v1.1.1 (2026-10-24)
+
+- `clear()` on a handle blit already removed (its window closed, its buffer
+  left or wiped, or an earlier `clear()`) is now a no-op. It used to run the
+  teardown again, which could free the pixel data of another placement of
+  the same PNG that was still on screen
+  ([#81](https://github.com/optiflowic/blit.nvim/issues/81)).
 
 ### v1.1.0 (2026-10-17)
 
