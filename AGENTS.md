@@ -70,6 +70,10 @@ Rules:
   (buf, win, col, ns). Boolean names read as predicates (`is_supported`, `has_tmux`).
 - Guard clauses over nested ifs. Small functions. If a function needs a comment
   explaining "sections", split it.
+- Readability over cleverness: names state intent, one responsibility per function,
+  comments explain *why*. (Principles from "The Art of Readable Code".)
+- No speculative code: no unused abstractions, extension points, or options added
+  "for later". Every line must serve the change at hand.
 
 ## Performance Rules
 

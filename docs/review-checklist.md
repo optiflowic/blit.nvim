@@ -49,4 +49,6 @@ Severity when reporting findings:
 ## General Lua Quality (category: style)
 - [ ] Guard clauses over nested ifs; small functions
 - [ ] snake_case; predicate-style boolean names; conventional abbreviations only
+- [ ] Readable: names state intent, one responsibility per function, comments explain *why*
+- [ ] No speculative code: no unused abstractions, extension points, or "for later" options
 - [ ] `stylua` / `selene` clean
