@@ -601,6 +601,62 @@ T["show"]["rejects a file that isn't a valid PNG, without writing anything"] = f
   os.remove(bad_path)
 end
 
+---Assert show() with `opts` fails with nil, err and leaves nothing behind:
+---no handle, nothing written, and the next valid show() of the same file
+---still transmits its data (issue #92).
+---@param opts blit.ShowOpts
+local function expect_rejected_target(opts)
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+
+  local handle, err =
+    renderer.show(tmp_path, vim.tbl_extend("keep", opts, { width = 5, height = 3 }))
+
+  MiniTest.expect.equality(handle, nil)
+  MiniTest.expect.equality(type(err), "string")
+  MiniTest.expect.equality(#renderer._handles, 0)
+  MiniTest.expect.equality(#captured, 0)
+
+  local valid = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  MiniTest.expect.equality(valid.visible, true)
+  MiniTest.expect.equality(table.concat(captured[1], ""):find("a=T", 1, true) ~= nil, true)
+end
+
+T["show"]["lnum past the last line: nil, err and no leftover state (issue #92)"] = function()
+  expect_rejected_target({ lnum = 11 })
+end
+
+T["show"]["rejects a non-positive or fractional lnum before any state changes (issue #92)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  for _, lnum in ipairs({ 0, -1, 1.5 }) do
+    local ok =
+      pcall(renderer.show, tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = lnum })
+    MiniTest.expect.equality(ok, false)
+  end
+  MiniTest.expect.equality(#renderer._handles, 0)
+
+  local valid = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  MiniTest.expect.equality(table.concat(captured[1], ""):find("a=T", 1, true) ~= nil, true)
+  MiniTest.expect.equality(valid.visible, true)
+end
+
+T["show"]["deleted buffer: nil, err and no leftover state (issue #92)"] = function()
+  local gone = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_delete(gone, { force = true })
+  expect_rejected_target({ buf = gone, lnum = 1 })
+end
+
+T["show"]["closed window: nil, err and no leftover state (issue #92)"] = function()
+  local gone = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = 5,
+    height = 2,
+  })
+  vim.api.nvim_win_close(gone, true)
+  expect_rejected_target({ win = gone, lnum = 1 })
+end
+
 T["show"]["forces a screen redraw before placement (issue #19)"] = function()
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local order = {}
