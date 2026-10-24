@@ -95,10 +95,15 @@ json_get() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "$1" "$2"
 }
 
-capture() {
-  local req=$1 base=${1%.json}
-  screencapture -x -o -t bmp -l "$window_id" "$base.bmp"
-  if python3 "$here/check.py" analyze "$req" "$base.bmp" "$run_dir/calib.json" >>"$results"; then
+screenshot() {
+  screencapture -x -o -t bmp -l "$window_id" "${1%.json}.bmp"
+}
+
+# Run `check.py <calibrate|analyze>` on a request's screenshot. The screenshot
+# is kept, downscaled, only if the check fails.
+check() {
+  local command=$1 req=$2 base=${2%.json}
+  if python3 "$here/check.py" "$command" "$req" "$base.bmp" "$run_dir/calib.json" >>"$results"; then
     rm -f "$base.bmp"
   else
     sips -s format png -Z 1200 "$base.bmp" --out "$base.png" >/dev/null
@@ -107,9 +112,33 @@ capture() {
   fi
 }
 
+# A resize can move the whole cell grid (kitty centers it in the window), so
+# screenshots taken after one are checked only once the grid is measured again.
+capture() {
+  screenshot "$1"
+  if [[ -n "$needs_calibration" ]]; then
+    awaiting_calibration+=("$1")
+  else
+    check analyze "$1"
+  fi
+}
+
+calibrate() {
+  screenshot "$1"
+  check calibrate "$1"
+  needs_calibration=""
+  local req
+  for req in "${awaiting_calibration[@]}"; do
+    check analyze "$req"
+  done
+  awaiting_calibration=()
+}
+
 window_id=""
 owner_pid=""
 resize_failed=""
+needs_calibration=""
+awaiting_calibration=()
 n=1
 deadline=$((SECONDS + 300))
 while ((SECONDS < deadline)); do
@@ -133,8 +162,10 @@ while ((SECONDS < deadline)); do
         capture "$req"
       fi
       ;;
+    calibrate) calibrate "$req" ;;
     result) json_get "$req" line >>"$results" ;;
     resize)
+      needs_calibration=1
       if ! resize_window "$(json_get "$req" dw)" "$(json_get "$req" dh)" 2>"$run_dir/resize.err"; then
         if [[ -z "$resize_failed" ]]; then
           echo "FAIL resize: $(tr '\n' ' ' <"$run_dir/resize.err")" >>"$results"
@@ -158,6 +189,9 @@ while ((SECONDS < deadline)); do
   n=$((n + 1))
 done
 ((SECONDS < deadline)) || echo "FAIL timeout: scenario did not finish" >>"$results"
+for req in "${awaiting_calibration[@]}"; do
+  echo "FAIL $(json_get "$req" name): no calibration after the last resize" >>"$results"
+done
 
 echo "== $term"
 cat "$results"

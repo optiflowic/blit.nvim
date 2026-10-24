@@ -15,7 +15,7 @@ use Neovim >= 0.12 so the error-response checks run. It covers every item
 below except the WezTerm crash (#31):
 
 - From screenshots: basic placement, the first `show()` of the session
-  (#19, the `calibrate` image), `col` offset (#9), a second image above the
+  (#19), `col` offset (#9), a second image above the
   first (#18), a box of another aspect ratio, `max_width`/`max_height`
   (#76), cropping at the top, bottom
   and right edges and back (#23, #28), scrolling out of view and back, an
@@ -31,9 +31,15 @@ below except the WezTerm crash (#31):
   supported with no rejected image, and the corrupt PNG is listed as
   rejected on kitty and Ghostty but not on WezTerm.
 
-A larger copy of the image shown first (`calibrate`) is used to measure
-cell size and the screen origin, so every later check depends on it being
-placed right. Glance at that first image once per terminal.
+Cell size and the screen origin are measured (`calibrate`) from marker
+blocks Neovim paints with a highlight, which the terminal draws as cell
+backgrounds, so the measurement does not depend on blit and a systematic
+placement error (e.g. every image one cell off) still fails. Image positions
+are judged against the terminal's cell grid as measured, with no correction
+on top. kitty's default `placement_strategy center` moves the whole grid by a
+fraction of a cell on every window resize; that is correct terminal behavior
+and not something blit, which places images in cells, should fix. The grid is
+measured again after every resize instead.
 
 Still checked by hand: nothing while wezterm/wezterm#7953 is open. See the
 WezTerm crash item (#31) below.
