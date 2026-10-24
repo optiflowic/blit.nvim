@@ -1555,7 +1555,7 @@ local function resolve_target(opts)
   end
   local lnum = opts.lnum or vim.api.nvim_win_get_cursor(win)[1]
   local line_count = vim.api.nvim_buf_line_count(buf)
-  if lnum < 1 or lnum > line_count then
+  if lnum > line_count then
     return nil,
       ("blit: lnum %s is out of range (buffer %d has %d lines)"):format(lnum, buf, line_count)
   end
@@ -1592,7 +1592,7 @@ function M.show(path, opts)
     },
     buf = { opts.buf, "number", true },
     win = { opts.win, "number", true },
-    lnum = { opts.lnum, "number", true },
+    lnum = { opts.lnum, is_positive_integer_or_nil, "a positive integer (1-indexed line), or nil" },
     col = {
       opts.col,
       is_non_negative_integer_or_nil,

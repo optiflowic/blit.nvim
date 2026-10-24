@@ -625,8 +625,18 @@ T["show"]["lnum past the last line: nil, err and no leftover state (issue #92)"]
   expect_rejected_target({ lnum = 11 })
 end
 
-T["show"]["lnum below 1: nil, err and no leftover state (issue #92)"] = function()
-  expect_rejected_target({ lnum = 0 })
+T["show"]["rejects a non-positive or fractional lnum before any state changes (issue #92)"] = function()
+  local buf, win = setup_floating(numbered_lines(10), 20, 10)
+  for _, lnum in ipairs({ 0, -1, 1.5 }) do
+    local ok =
+      pcall(renderer.show, tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = lnum })
+    MiniTest.expect.equality(ok, false)
+  end
+  MiniTest.expect.equality(#renderer._handles, 0)
+
+  local valid = renderer.show(tmp_path, { width = 5, height = 3, buf = buf, win = win, lnum = 2 })
+  MiniTest.expect.equality(table.concat(captured[1], ""):find("a=T", 1, true) ~= nil, true)
+  MiniTest.expect.equality(valid.visible, true)
 end
 
 T["show"]["deleted buffer: nil, err and no leftover state (issue #92)"] = function()

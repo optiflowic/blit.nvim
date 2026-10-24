@@ -58,7 +58,7 @@ show({path}, {opts})
     Show the PNG at {path} anchored under buffer line {opts.lnum}.
     Returns a handle table on success, or `nil, err_msg` on failure
     (unsupported environment, missing/oversized file, not a valid PNG,
-    an invalid {opts.win}/{opts.buf}, an {opts.lnum} outside the buffer,
+    an invalid {opts.win}/{opts.buf}, an {opts.lnum} past the buffer's last line,
     or bad arguments). A failed call leaves nothing behind.
 
     {opts} is a table:
