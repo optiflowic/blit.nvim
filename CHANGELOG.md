@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.2](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v1.1.1...blit.nvim-v1.1.2) (2026-10-24)
+
+
+### Bug Fixes
+
+* detect Zellij, herdr and GNU screen as unsupported multiplexers ([#91](https://github.com/optiflowic/blit.nvim/issues/91)) ([8b66402](https://github.com/optiflowic/blit.nvim/commit/8b664025cff3218affd3969980be1c7963e8cc93))
+* return nil, err from show() for a missing window, buffer or line ([#93](https://github.com/optiflowic/blit.nvim/issues/93)) ([a7971c0](https://github.com/optiflowic/blit.nvim/commit/a7971c03198074a27de93e4a95ffc6ce99c827ae))
+
 ## [1.1.1](https://github.com/optiflowic/blit.nvim/compare/blit.nvim-v1.1.0...blit.nvim-v1.1.1) (2026-10-24)
 
 
