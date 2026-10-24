@@ -128,7 +128,8 @@ calibrate() {
   check calibrate "$1"
   needs_calibration=""
   local req
-  for req in "${awaiting_calibration[@]}"; do
+  # The guard keeps an empty array from tripping `set -u` on bash < 4.4.
+  for req in ${awaiting_calibration[@]+"${awaiting_calibration[@]}"}; do
     check analyze "$req"
   done
   awaiting_calibration=()
@@ -189,7 +190,7 @@ while ((SECONDS < deadline)); do
   n=$((n + 1))
 done
 ((SECONDS < deadline)) || echo "FAIL timeout: scenario did not finish" >>"$results"
-for req in "${awaiting_calibration[@]}"; do
+for req in ${awaiting_calibration[@]+"${awaiting_calibration[@]}"}; do
   echo "FAIL $(json_get "$req" name): no calibration after the last resize" >>"$results"
 done
 

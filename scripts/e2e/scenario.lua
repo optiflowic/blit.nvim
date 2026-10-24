@@ -182,6 +182,7 @@ end
 ---@param win integer
 ---@param lnum integer
 ---@param col integer 0-based byte column
+---@return { row: integer, col: integer, rows: integer, cols: integer }
 local function paint_marker(win, lnum, col)
   local buf = vim.api.nvim_win_get_buf(win)
   for row = lnum, lnum + MARKER_SIZE.rows - 1 do
