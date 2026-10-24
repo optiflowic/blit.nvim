@@ -2,11 +2,13 @@
 -- terminal under test; not meant to be run by hand.
 --
 -- Each step talks to the runner through files in $BLIT_E2E_DIR:
---   req-NNN.json  written here ({ type = "ready" | "capture" | "resize" | "result" | "quit" | "error" })
+--   req-NNN.json  written here ({ type = "ready" | "calibrate" | "capture" | "resize" | "result" | "quit" | "error" })
 --   ack-NNN       written by the runner once the request is handled
 --
 -- A "capture" request carries where each image should be on screen, in
 -- 1-based screen cells. run.sh takes a screenshot and check.py compares it.
+-- A "calibrate" request carries where the marker blocks are, which check.py
+-- measures cell size and the screen origin from.
 
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h")
 vim.opt.runtimepath:prepend(root)
@@ -26,10 +28,12 @@ local corrupt = dir .. "/corrupt.png"
 
 local IMG_COLS = 8
 local IMG_ROWS = 6
--- Cell size is measured from two copies at the top-left and far right of
--- the window, so rounding error does not add up across the screen.
-local CALIBRATION_COLS = 24
-local CALIBRATION_ROWS = 12
+-- Calibration marker: a block of cells with a magenta background (check.py's
+-- MARKER_INDEX), painted with a highlight so the terminal itself draws it.
+local MARKER_HL = "BlitE2EMarker"
+local MARKER_COLOR = "#ff00ff"
+local MARKER_SIZE = { cols = 4, rows = 2 }
+local marker_ns = vim.api.nvim_create_namespace("blit-e2e")
 -- Long enough for the debounce, Ghostty's resize settle timer, and a repaint.
 local SETTLE_MS = 400
 local ACK_TIMEOUT_MS = 30000
@@ -120,13 +124,11 @@ end
 
 ---@param name string
 ---@param images table[]
----@param calibrate? boolean
-local function capture(name, images, calibrate)
+local function capture(name, images)
   request({
     type = "capture",
     name = name,
     images = images,
-    calibrate = calibrate,
     screen = { rows = vim.o.lines, cols = vim.o.columns },
   })
 end
@@ -173,6 +175,62 @@ local function resize(dw, dh, settle_ms)
   if settle_ms ~= 0 then
     wait(settle_ms or SETTLE_MS * 2)
   end
+end
+
+---Paint a marker block with its top-left at buffer (lnum, col) and return
+---where it is on screen, in 1-based screen cells.
+---@param win integer
+---@param lnum integer
+---@param col integer 0-based byte column
+---@return { row: integer, col: integer, rows: integer, cols: integer }
+local function paint_marker(win, lnum, col)
+  local buf = vim.api.nvim_win_get_buf(win)
+  for row = lnum, lnum + MARKER_SIZE.rows - 1 do
+    vim.api.nvim_buf_set_extmark(buf, marker_ns, row - 1, col, {
+      end_col = col + MARKER_SIZE.cols,
+      hl_group = MARKER_HL,
+    })
+  end
+  local pos = vim.fn.screenpos(win, lnum, col + 1)
+  return { row = pos.row, col = pos.col, rows = MARKER_SIZE.rows, cols = MARKER_SIZE.cols }
+end
+
+-- Measure the cell grid from two marker blocks near the top-left and
+-- bottom-right corners; their outer edges span most of the screen, so rounding
+-- error stays small. The markers share a color with the fixture, so they are
+-- painted in a new tab, where blit hides every image (#16) without destroying
+-- the handles. They stay one cell clear of the screen edges, which some
+-- terminals extend into the window padding (e.g. Ghostty's
+-- window-padding-color = extend), and of the cursor at line 1, column 1.
+---@param name string
+local function calibrate(name)
+  local tab = vim.api.nvim_get_current_tabpage()
+  vim.cmd("tabnew")
+  vim.bo.buftype = "nofile"
+  vim.bo.bufhidden = "wipe"
+  local win = vim.api.nvim_get_current_win()
+  local info = vim.fn.getwininfo(win)[1]
+  local blank = (" "):rep(info.width)
+  local lines = {}
+  for i = 1, info.height do
+    lines[i] = blank
+  end
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  local markers = {
+    paint_marker(win, 2, 1),
+    paint_marker(win, info.height - MARKER_SIZE.rows, info.width - MARKER_SIZE.cols - 1),
+  }
+  wait(SETTLE_MS)
+  request({
+    type = "calibrate",
+    name = name,
+    markers = markers,
+    screen = { rows = vim.o.lines, cols = vim.o.columns },
+  })
+  vim.cmd("tabclose")
+  -- tabclose moves to a neighbor, which need not be the tab we came from.
+  vim.api.nvim_set_current_tabpage(tab)
+  wait(SETTLE_MS)
 end
 
 local function open_scratch()
@@ -275,14 +333,7 @@ local function run()
 
   local buf = open_scratch()
   local win = vim.api.nvim_get_current_win()
-
-  local size = { cols = CALIBRATION_COLS, rows = CALIBRATION_ROWS }
-  local right_edge = vim.fn.getwininfo(win)[1].width - CALIBRATION_COLS
-  local top_left = show(2, 0, size)
-  local bottom_right = show(3, right_edge, size)
-  capture("calibrate", { expected(win, 2, 0, size), expected(win, 3, right_edge, size) }, true)
-  clear(top_left)
-  clear(bottom_right)
+  calibrate("calibrate")
 
   local handle = show(2)
   capture("show", { expected(win, 2) })
@@ -402,13 +453,18 @@ local function run()
   capture("removed on window close", {})
 
   -- Resizing the terminal window itself (#34), then showing after a resize (#24).
+  -- The grid is measured again after every resize; run.sh holds back checking
+  -- a capture taken before that until it is.
   handle = show(2)
   resize(-80, -80)
   capture("visible after window resize (#34)", { expected(win, 2) })
+  calibrate("calibrate after resize")
   resize(80, 80)
   capture("visible after second resize (#34)", { expected(win, 2) })
+  calibrate("calibrate after second resize")
   clear(handle)
   resize(-80, -80)
+  calibrate("calibrate after third resize")
   handle = show(2)
   capture("re-show after window resize (#24)", { expected(win, 2) })
 
@@ -419,6 +475,7 @@ local function run()
   wait(SETTLE_MS * 2)
   capture("show right after window resize (#61)", { expected(win, 2), expected(win, 20) })
   clear(again)
+  calibrate("calibrate after fourth resize")
 
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local stray = vim.fn.mode() ~= "n"
@@ -466,6 +523,9 @@ vim.o.titleold = "blit-e2e"
 vim.o.laststatus = 2
 vim.o.number = false
 vim.opt.shortmess:append("I")
+-- The marker color must reach the terminal as 24-bit RGB, not a palette index.
+vim.o.termguicolors = true
+vim.api.nvim_set_hl(0, MARKER_HL, { bg = MARKER_COLOR })
 
 runner = coroutine.create(run)
 vim.schedule(resume)
