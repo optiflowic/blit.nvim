@@ -15,7 +15,7 @@ Severity when reporting findings:
 - [ ] No API below Neovim 0.10; no polyfills
 - [ ] Layer direction respected: `api → renderer → terminal`; no reverse requires
 - [ ] Escape sequences constructed only in `terminal.lua`; autocmds/extmarks only in `renderer.lua`
-- [ ] Unsupported environment (non-supported terminal, GUI, `--embed`, tmux) results in silent no-op, never emitted sequences
+- [ ] Unsupported environment (non-supported terminal, GUI, `--embed`, terminal multiplexer) results in silent no-op, never emitted sequences
 
 ## Protocol Fidelity (category: fidelity)
 - [ ] Behavior matches `docs/spec/kitty-graphics.md` (control keys, chunk size, base64 framing)

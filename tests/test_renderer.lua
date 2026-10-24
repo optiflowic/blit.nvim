@@ -62,7 +62,7 @@ local T = MiniTest.new_set({
         return true
       end
       renderer._detect_fn = function()
-        return { terminal = "kitty", tmux = false, gui_embed = false, supported = true }
+        return { terminal = "kitty", gui_embed = false, supported = true }
       end
       renderer._ghostty_settle_ms = 5
       make_png_file()
@@ -433,7 +433,7 @@ end
 
 T["show"]["ghostty: reuses idle cache entry when terminal size is unchanged"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
 
@@ -451,7 +451,7 @@ end
 
 T["show"]["ghostty: drops idle cache entry and retransmits after a terminal resize (issue #24)"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
 
@@ -1275,7 +1275,7 @@ end
 
 T["redraw"]["ghostty: retransmits a still-visible handle after a terminal resize (issue #34)"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local handle = renderer.show(
@@ -1320,7 +1320,7 @@ end
 
 T["redraw"]["ghostty: sends no a=p for a stale id while its retransmit is pending (issue #61)"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   -- Long enough for several debounced redraw passes to run before the
   -- settle timer fires.
@@ -1356,7 +1356,7 @@ end
 
 T["redraw"]["ghostty: fan-out onto a stale active id sends no a=p before the retransmit (issue #61)"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local first = renderer.show(
@@ -1390,7 +1390,7 @@ end
 
 T["redraw"]["ghostty: retries a failed retransmit without a further resize event (issue #37)"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local handle = renderer.show(
@@ -1435,7 +1435,7 @@ end
 
 T["redraw"]["ghostty: migrates a whole fanned-out group sharing a stale id together (issue #10)"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local first = renderer.show(
@@ -1497,7 +1497,7 @@ end
 
 T["redraw"]["ghostty: does not retransmit a still-visible handle when size is unchanged"] = function()
   renderer._detect_fn = function()
-    return { terminal = "ghostty", tmux = false, gui_embed = false, supported = true }
+    return { terminal = "ghostty", gui_embed = false, supported = true }
   end
   local buf, win = setup_floating(numbered_lines(10), 20, 10)
   local handle = renderer.show(

@@ -22,7 +22,8 @@ No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 
 - Neovim >= 0.10
 - Terminal: kitty, WezTerm, or Ghostty
-- tmux is explicitly unsupported (blit no-ops under tmux)
+- Terminal multiplexers (tmux, Zellij, herdr, GNU screen) are explicitly
+  unsupported (blit no-ops inside them)
 - GUI frontends / `--embed` (e.g. Neovide) are unsupported (blit no-ops)
 
 Run `:checkhealth blit` to see detection results for your environment. On
@@ -42,9 +43,9 @@ WezTerm sends no such error for a rejected PNG, so none is listed there.
 - Zero external dependencies — never requires ImageMagick, luarocks, Python,
   Node, or any external binary.
 - PNG only. Other formats are out of scope until v2.
-- Only kitty, WezTerm, and Ghostty are supported; every other terminal
-  (or an unsupported environment such as tmux or a GUI frontend) is a
-  silent no-op, reported via `:checkhealth`.
+- Only kitty, WezTerm, and Ghostty are supported; every other terminal (or
+  an unsupported environment such as a terminal multiplexer or a GUI
+  frontend) is a silent no-op, reported via `:checkhealth`.
 
 See `AGENTS.md` for the full set of project constraints and architecture.
 

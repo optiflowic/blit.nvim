@@ -352,11 +352,26 @@ function M.detect_terminal(env)
   return nil
 end
 
+-- Checked in order; see docs/spec/terminal-detection.md ("Exclusion checks")
+-- for why herdr comes before tmux.
+local MULTIPLEXER_VARS = {
+  { var = "HERDR_ENV", name = "herdr" },
+  { var = "TMUX", name = "tmux" },
+  { var = "ZELLIJ", name = "Zellij" },
+  { var = "STY", name = "GNU screen" },
+}
+
+---Name of the terminal multiplexer Neovim runs inside, if any.
 ---@param env? table<string, string?>
----@return boolean
-function M.has_tmux(env)
+---@return string? name
+function M.detect_multiplexer(env)
   env = env or vim.env
-  return env.TMUX ~= nil
+  for _, multiplexer in ipairs(MULTIPLEXER_VARS) do
+    if env[multiplexer.var] ~= nil then
+      return multiplexer.name
+    end
+  end
+  return nil
 end
 
 ---@param ttyout? fun(): integer
@@ -370,7 +385,7 @@ end
 
 ---@class blit.terminal.Capabilities
 ---@field terminal "kitty"|"wezterm"|"ghostty"|nil
----@field tmux boolean
+---@field multiplexer? string name of the multiplexer found, if any
 ---@field gui_embed boolean
 ---@field supported boolean
 ---@field reason? string
@@ -380,15 +395,15 @@ end
 ---@return blit.terminal.Capabilities
 function M.detect(env, ttyout)
   local terminal = M.detect_terminal(env)
-  local tmux = M.has_tmux(env)
+  local multiplexer = M.detect_multiplexer(env)
   local gui_embed = M.is_gui_embed(ttyout)
 
   local supported = true
   local reason = nil
 
-  if tmux then
+  if multiplexer then
     supported = false
-    reason = "tmux"
+    reason = "multiplexer"
   elseif gui_embed then
     supported = false
     reason = "gui_embed"
@@ -399,7 +414,7 @@ function M.detect(env, ttyout)
 
   return {
     terminal = terminal,
-    tmux = tmux,
+    multiplexer = multiplexer,
     gui_embed = gui_embed,
     supported = supported,
     reason = reason,

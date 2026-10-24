@@ -15,7 +15,9 @@ No ImageMagick. No luarocks. No external binaries. Pure Lua on Neovim >= 0.10.
 - **Supported terminals: kitty, WezTerm, Ghostty.** Detect via env vars. On any
   other terminal (or GUI/`--embed`), silently no-op and report via `:checkhealth`.
   Never emit escape sequences to an unsupported terminal.
-- **tmux is explicitly unsupported.** Detect (`$TMUX`) and no-op.
+- **Terminal multiplexers are explicitly unsupported** (tmux, Zellij, herdr,
+  GNU screen). Detect them by env var (the list lives in
+  `docs/spec/terminal-detection.md`) and no-op.
 
 ## Architecture
 
@@ -34,7 +36,7 @@ lua/blit/
                   -- redraw on WinScrolled/WinResized/BufWinLeave, lifecycle.
                   -- Knows NOTHING about escape sequence syntax.
   health.lua      -- :checkhealth blit — terminal detection result, protocol
-                  -- support, Neovim version, tmux/GUI exclusion reasons.
+                  -- support, Neovim version, multiplexer/GUI exclusion reasons.
 ```
 
 Rules:
@@ -67,7 +69,7 @@ Rules:
   mistakes (bad argument types) via `vim.validate`.
 - No `vim.notify` spam. Failures surface through return values and `:checkhealth`.
 - Naming: snake_case functions/locals, no abbreviations except conventional ones
-  (buf, win, col, ns). Boolean names read as predicates (`is_supported`, `has_tmux`).
+  (buf, win, col, ns). Boolean names read as predicates (`is_supported`, `is_gui_embed`).
 - Guard clauses over nested ifs. Small functions. If a function needs a comment
   explaining "sections", split it.
 - Readability over cleverness: names state intent, one responsibility per function,
