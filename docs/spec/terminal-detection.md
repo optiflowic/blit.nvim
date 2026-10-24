@@ -155,6 +155,14 @@ to consume the whole buffer in one call regardless of blocking mode, so
   `ssh` into a machine where the variable was exported) even when the
   actual terminal on the other end is not kitty. This is an accepted,
   documented limitation, not solved (tracked in #13).
+- A multiplexer variable (`$TMUX`, `$ZELLIJ`, `$HERDR_ENV`, `$STY`) can be
+  inherited by a supported terminal launched from inside a multiplexer
+  pane (e.g. `kitty &` run in Zellij or screen). blit then reports
+  `reason = "multiplexer"` and no-ops even though the outer terminal is
+  supported. This is an accepted false positive: it fails safe (no escape
+  sequences emitted), `:checkhealth blit` names the multiplexer found, and
+  unsetting the variable before launching the terminal works around it.
+  No narrowing check (e.g. pairing `$STY` with `$TERM`) is applied.
 
 ## Future considerations (not implemented)
 
